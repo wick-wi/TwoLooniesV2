@@ -1,0 +1,150 @@
+.analysis-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.analysis-header {
+  margin-bottom: 2rem;
+}
+
+.analysis-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.analysis-header h1 {
+  font-size: 1.75rem;
+  margin-bottom: 0.25rem;
+}
+
+.btn-dashboard-link {
+  padding: 0.5rem 1rem;
+  background: #1a365d;
+  border: none;
+  border-radius: 0.5rem;
+  color: white;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.btn-dashboard-link:hover {
+  opacity: 0.9;
+}
+
+.source-badge {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.card {
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.card h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #64748b;
+  margin: 0 0 0.5rem;
+}
+
+.card .amount {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.amount.positive { color: #059669; }
+.amount.negative { color: #dc2626; }
+
+.insight-section {
+  margin-bottom: 2rem;
+}
+
+.insight-section h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+}
+
+.category-list,
+.merchant-list,
+.month-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: #f8fafc;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.category-list li,
+.merchant-list li,
+.month-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.category-list li:last-child,
+.merchant-list li:last-child,
+.month-list li:last-child {
+  border-bottom: none;
+}
+
+.cat-name,
+.merchant-name,
+.month-name {
+  font-weight: 500;
+}
+
+.cat-amount,
+.merchant-amount,
+.month-amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.month-amount.positive { color: #059669; }
+.month-amount.negative { color: #dc2626; }
+
+.cta-section {
+  margin-top: 2.5rem;
+  padding: 1.5rem;
+  background: #1a365d;
+  color: white;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.cta-section p {
+  margin: 0 0 1rem;
+}
+
+.btn-save {
+  padding: 0.75rem 1.5rem;
+  background: white;
+  color: #1a365d;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-save:hover {
+  opacity: 0.95;
+}

@@ -1,0 +1,8 @@
+fastapi
+plaid-python
+python-dotenv
+uvicorn
+pdfplumber
+python-multipart
+supabase
+PyJWT

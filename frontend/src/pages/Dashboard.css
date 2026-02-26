@@ -1,0 +1,310 @@
+.dashboard-page {
+  min-height: 100vh;
+  background: #020617;
+  color: white;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.dashboard-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 1rem 1.5rem;
+}
+
+.dashboard-header-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dashboard-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.dashboard-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.btn-header {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.5rem;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-header:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-outline:hover {
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #f87171;
+}
+
+.dashboard-loading,
+.dashboard-error {
+  max-width: 720px;
+  margin: 2rem auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.dashboard-error {
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: 0.5rem;
+  color: #fca5a5;
+}
+
+.statements-section,
+.analysis-section {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+
+.statements-section h2,
+.analysis-section h2 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+  font-weight: 600;
+}
+
+.statements-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.statements-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.btn-primary-dash {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  background: linear-gradient(to right, #fbbf24, #ca8a04);
+  color: #000;
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: opacity 0.2s, box-shadow 0.2s;
+}
+
+.btn-primary-dash:hover {
+  opacity: 0.95;
+  box-shadow: 0 0 20px rgba(251, 191, 36, 0.4);
+}
+
+.btn-secondary-dash {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #e2e8f0;
+  border-radius: 0.5rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-secondary-dash:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-secondary-dash:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.statements-empty {
+  padding: 3rem 2rem;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 0.75rem;
+}
+
+.statements-empty-icon {
+  color: #64748b;
+  margin-bottom: 1rem;
+}
+
+.statements-empty p {
+  margin: 0 0 1.5rem;
+  color: #94a3b8;
+}
+
+.statements-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.statement-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+}
+
+.statement-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.statement-info svg {
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+
+.statement-filename {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statement-meta {
+  font-size: 0.85rem;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.btn-remove {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  background: rgba(248, 113, 113, 0.15);
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  color: #fca5a5;
+  border-radius: 0.375rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-remove:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+.btn-remove:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Reuse analysis styles with dark theme */
+.analysis-section .summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.analysis-section .card {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.analysis-section .card h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin: 0 0 0.5rem;
+}
+
+.analysis-section .card .amount {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.analysis-section .amount.positive { color: #34d399; }
+.analysis-section .amount.negative { color: #f87171; }
+
+.insight-block {
+  margin-bottom: 1.5rem;
+}
+
+.insight-block h3 {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.analysis-section .category-list,
+.analysis-section .merchant-list,
+.analysis-section .month-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.analysis-section .category-list li,
+.analysis-section .merchant-list li,
+.analysis-section .month-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.analysis-section .category-list li:last-child,
+.analysis-section .merchant-list li:last-child,
+.analysis-section .month-list li:last-child {
+  border-bottom: none;
+}
+
+.analysis-section .cat-name,
+.analysis-section .merchant-name,
+.analysis-section .month-name {
+  font-weight: 500;
+}
+
+.analysis-section .month-amount.positive { color: #34d399; }
+.analysis-section .month-amount.negative { color: #f87171; }
