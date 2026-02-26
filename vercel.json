@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pip install -r requirements.txt && python build_embed.py",
+  "buildCommand": "python build_embed.py",
   "rewrites": [
     { "source": "/((?!api/|static/).*)", "destination": "/index.html" }
   ]
