@@ -33,6 +33,7 @@ file_logger.propagate = False
 
 from fastapi import FastAPI, Body, File, UploadFile, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 # This tells Python: "Find the folder this script is in, and look for .env right there."
 env_path = Path(__file__).parent / ".env"
@@ -102,9 +103,17 @@ configuration = plaid.Configuration(
 api_client = plaid.ApiClient(configuration)
 client = plaid_api.PlaidApi(api_client)
 
+def _serve_frontend(path: str = "index.html"):
+    """Serve React app for Vercel deployment (static files in public/)."""
+    index_path = Path(__file__).parent / "public" / path
+    if not index_path.exists():
+        index_path = Path(__file__).parent / "public" / "index.html"
+    return FileResponse(index_path, media_type="text/html") if index_path.exists() else {"message": "Backend is running!"}
+
+
 @app.get("/")
 def read_root():
-    return {"message": "Backend is running!"}
+    return _serve_frontend("index.html")
 
 @app.post("/api/create_link_token")
 async def create_link_token():
@@ -433,6 +442,14 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/{path:path}")
+def serve_spa(path: str):
+    """Serve index.html for SPA routes (/analysis, /dashboard) - must be last."""
+    if path.startswith("api/") or path.startswith("static/"):
+        raise HTTPException(status_code=404, detail="Not found")
+    return _serve_frontend("index.html")
 
 
 if __name__ == "__main__":
