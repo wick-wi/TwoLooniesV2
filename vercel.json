@@ -1,6 +1,6 @@
 {
-  "buildCommand": "cd frontend && npm ci && npm run build && cd .. && mkdir -p public && cp -r frontend/build/* public/",
+  "buildCommand": "pip install -r requirements.txt && python build_embed.py",
   "rewrites": [
-    { "source": "/((?!api/|static/).*)", "destination": "/index.html", "has": [{ "type": "header", "key": "accept", "value": "text/html" }] }
+    { "source": "/((?!api/|static/).*)", "destination": "/index.html" }
   ]
 }

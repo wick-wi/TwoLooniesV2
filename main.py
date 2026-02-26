@@ -33,7 +33,7 @@ file_logger.propagate = False
 
 from fastapi import FastAPI, Body, File, UploadFile, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from dotenv import load_dotenv
 # This tells Python: "Find the folder this script is in, and look for .env right there."
 env_path = Path(__file__).parent / ".env"
@@ -103,17 +103,29 @@ configuration = plaid.Configuration(
 api_client = plaid.ApiClient(configuration)
 client = plaid_api.PlaidApi(api_client)
 
-def _serve_frontend(path: str = "index.html"):
-    """Serve React app for Vercel deployment (static files in public/)."""
-    index_path = Path(__file__).parent / "public" / path
-    if not index_path.exists():
+
+def _get_index_html():
+    """Serve embedded React index.html (from build) or fallback."""
+    try:
+        from embedded_index import INDEX_HTML
+        return INDEX_HTML
+    except ImportError:
         index_path = Path(__file__).parent / "public" / "index.html"
-    return FileResponse(index_path, media_type="text/html") if index_path.exists() else {"message": "Backend is running!"}
+        if index_path.exists():
+            return index_path.read_text(encoding="utf-8")
+        return None
 
 
-@app.get("/")
-def read_root():
-    return _serve_frontend("index.html")
+@app.get("/", response_class=HTMLResponse)
+@app.get("/analysis", response_class=HTMLResponse)
+@app.get("/dashboard", response_class=HTMLResponse)
+def serve_frontend():
+    """Serve React app for root and SPA routes."""
+    html = _get_index_html()
+    if html:
+        return html
+    return """<!DOCTYPE html><html><body><h1>Build required</h1><p>Run: python build_embed.py</p></body></html>"""
+
 
 @app.post("/api/create_link_token")
 async def create_link_token():
@@ -444,12 +456,25 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/{path:path}")
-def serve_spa(path: str):
-    """Serve index.html for SPA routes (/analysis, /dashboard) - must be last."""
+@app.get("/static/{path:path}")
+def serve_static(path: str):
+    """Serve static assets (JS, CSS) from public/."""
+    base = Path(__file__).parent / "public" / "static"
+    file_path = (base / path).resolve()
+    if not str(file_path).startswith(str(base.resolve())) or not file_path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(file_path)
+
+
+@app.get("/{path:path}", response_class=HTMLResponse)
+def serve_spa_catchall(path: str):
+    """Serve index.html for SPA routes - must be last."""
     if path.startswith("api/") or path.startswith("static/"):
         raise HTTPException(status_code=404, detail="Not found")
-    return _serve_frontend("index.html")
+    html = _get_index_html()
+    if html:
+        return html
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 if __name__ == "__main__":
