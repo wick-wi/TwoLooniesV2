@@ -35,7 +35,7 @@ export default function Landing() {
   const { setAnalysisData } = useAnalysis();
   const { isAuthenticated, signOut } = useAuth();
   const [linkToken, setLinkToken] = useState(null);
-  const [linkTokenLoading, setLinkTokenLoading] = useState(true);
+  const [, setLinkTokenLoading] = useState(true);
   const [linkTokenError, setLinkTokenError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);

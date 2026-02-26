@@ -12,7 +12,7 @@ const API_BASE = process.env.REACT_APP_API_URL ?? '';
 export default function Dashboard() {
   const navigate = useNavigate();
   const { isAuthenticated, getAccessToken, signOut, loading: authLoading } = useAuth();
-  const { analysis, transactions, setAnalysisData, clearAnalysis } = useAnalysis();
+  const { analysis, setAnalysisData, clearAnalysis } = useAnalysis();
   const [statements, setStatements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
