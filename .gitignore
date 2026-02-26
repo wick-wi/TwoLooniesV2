@@ -6,6 +6,7 @@ __pycache__/
 venv/
 .venv/
 logs/
+public/
 node_modules/
 .env.local
 .env.*.local

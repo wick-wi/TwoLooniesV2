@@ -4,7 +4,7 @@ import { useAnalysis } from '../context/AnalysisContext';
 import { supabase } from '../lib/supabase';
 import './SignUpModal.css';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
 export default function SignUpModal({ onClose, onSuccess, switchToLogin }) {
   const { analysis, source, accessToken, itemId, files } = useAnalysis();

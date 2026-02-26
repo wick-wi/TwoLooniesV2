@@ -13,7 +13,7 @@ import UploadStatementModal from '../components/UploadStatementModal';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
 function PlaidButton({ token, onSuccess }) {
   const { open, ready } = usePlaidLink({ token, onSuccess });

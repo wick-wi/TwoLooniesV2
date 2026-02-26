@@ -5,23 +5,29 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
-# Log to console and file
-LOG_DIR = Path(__file__).parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / "statement_uploads.log"
+# Log to console; skip file logging on Vercel (read-only filesystem)
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+if not IS_VERCEL:
+    LOG_DIR = Path(__file__).parent / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+    LOG_FILE = LOG_DIR / "statement_uploads.log"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
-logging.getLogger().addHandler(file_handler)
+if not IS_VERCEL:
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(file_handler)
 logger = logging.getLogger(__name__)
 file_logger = logging.getLogger("statement_upload_file")
-file_logger.addHandler(file_handler)
+if IS_VERCEL:
+    file_logger.addHandler(logging.StreamHandler())
+else:
+    file_logger.addHandler(file_handler)
 file_logger.setLevel(logging.INFO)
 file_logger.propagate = False
 
@@ -60,9 +66,14 @@ load_dotenv()
 
 app = FastAPI()
 
+# CORS: localhost for dev, Vercel for deployed frontend (same-origin when both on Vercel)
+_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+for env_var in ("VERCEL_URL", "VERCEL_BRANCH_URL"):
+    if url := os.environ.get(env_var):
+        _cors_origins.append(f"https://{url}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

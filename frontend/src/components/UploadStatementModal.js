@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import './UploadStatementModal.css';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+const API_BASE = process.env.REACT_APP_API_URL ?? '';
 const MAX_STATEMENTS = 12;
 
 export default function UploadStatementModal({ onClose, onSuccess }) {

@@ -1,0 +1,6 @@
+{
+  "buildCommand": "cd frontend && npm ci && npm run build && cd .. && mkdir -p public && cp -r frontend/build/* public/",
+  "rewrites": [
+    { "source": "/((?!api/|static/).*)", "destination": "/index.html", "has": [{ "type": "header", "key": "accept", "value": "text/html" }] }
+  ]
+}
