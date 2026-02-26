@@ -104,15 +104,28 @@ api_client = plaid.ApiClient(configuration)
 client = plaid_api.PlaidApi(api_client)
 
 
-def _get_index_html():
-    """Serve embedded React index.html (from build) or fallback."""
+def _find_static_base() -> Path | None:
+    """Find public/static on Vercel - try multiple locations."""
+    candidates = [
+        Path(__file__).parent / "public" / "static",
+        Path.cwd() / "public" / "static",
+        Path(__file__).parent.parent / "public" / "static",
+    ]
+    for p in candidates:
+        if (p / "js").exists() or any(p.glob("**/*.js")):
+            return p
+    return None
+
+
+def _get_index_html() -> str | None:
+    """Serve index.html from public/ or embedded."""
+    for p in [Path(__file__).parent / "public" / "index.html", Path.cwd() / "public" / "index.html"]:
+        if p.exists():
+            return p.read_text(encoding="utf-8")
     try:
         from embedded_index import INDEX_HTML
         return INDEX_HTML
     except ImportError:
-        index_path = Path(__file__).parent / "public" / "index.html"
-        if index_path.exists():
-            return index_path.read_text(encoding="utf-8")
         return None
 
 
@@ -120,11 +133,21 @@ def _get_index_html():
 @app.get("/analysis", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 def serve_frontend():
-    """Serve React app for root and SPA routes."""
+    """Serve React app."""
     html = _get_index_html()
-    if html:
-        return html
-    return """<!DOCTYPE html><html><body><h1>Build required</h1><p>Run: python build_embed.py</p></body></html>"""
+    return html or """<!DOCTYPE html><html><body><h1>Loading...</h1></body></html>"""
+
+
+@app.get("/static/{path:path}")
+def serve_static(path: str):
+    """Serve static assets."""
+    base = _find_static_base()
+    if not base:
+        raise HTTPException(status_code=404, detail="Static files not found")
+    file_path = (base / path).resolve()
+    if not str(file_path).startswith(str(base.resolve())) or not file_path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(file_path)
 
 
 @app.post("/api/create_link_token")
@@ -456,19 +479,9 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/static/{path:path}")
-def serve_static(path: str):
-    """Serve static assets (JS, CSS) from public/."""
-    base = Path(__file__).parent / "public" / "static"
-    file_path = (base / path).resolve()
-    if not str(file_path).startswith(str(base.resolve())) or not file_path.exists():
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(file_path)
-
-
 @app.get("/{path:path}", response_class=HTMLResponse)
 def serve_spa_catchall(path: str):
-    """Serve index.html for SPA routes - must be last."""
+    """SPA fallback - must be last."""
     if path.startswith("api/") or path.startswith("static/"):
         raise HTTPException(status_code=404, detail="Not found")
     html = _get_index_html()
