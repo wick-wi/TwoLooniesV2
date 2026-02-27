@@ -1,14 +1,19 @@
 import json
 import logging
 import os
+import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
+# Add project root for imports (analysis, pdf_parser, supabase_client, parsers)
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+
 # Log to console; skip file logging on Vercel (read-only filesystem)
 IS_VERCEL = os.environ.get("VERCEL") == "1"
 if not IS_VERCEL:
-    LOG_DIR = Path(__file__).parent / "logs"
+    LOG_DIR = _ROOT / "logs"
     LOG_DIR.mkdir(exist_ok=True)
     LOG_FILE = LOG_DIR / "statement_uploads.log"
 
@@ -33,10 +38,9 @@ file_logger.propagate = False
 
 from fastapi import FastAPI, Body, File, UploadFile, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
 from dotenv import load_dotenv
-# This tells Python: "Find the folder this script is in, and look for .env right there."
-env_path = Path(__file__).parent / ".env"
+
+env_path = _ROOT / ".env"
 load_dotenv(dotenv_path=env_path)
 
 print("--- SYSTEM CHECK ---")
@@ -97,57 +101,11 @@ configuration = plaid.Configuration(
     api_key={
         'clientId': PLAID_CLIENT_ID,
         'secret': PLAID_SECRET,
-        'plaidVersion': '2020-09-14' # Adding the explicit version helps too
+        'plaidVersion': '2020-09-14'
     }
 )
 api_client = plaid.ApiClient(configuration)
 client = plaid_api.PlaidApi(api_client)
-
-
-def _find_static_base() -> Path | None:
-    """Find public/static on Vercel - try multiple locations."""
-    candidates = [
-        Path(__file__).parent / "public" / "static",
-        Path.cwd() / "public" / "static",
-        Path(__file__).parent.parent / "public" / "static",
-    ]
-    for p in candidates:
-        if (p / "js").exists() or any(p.glob("**/*.js")):
-            return p
-    return None
-
-
-def _get_index_html() -> str | None:
-    """Serve index.html from public/ or embedded."""
-    for p in [Path(__file__).parent / "public" / "index.html", Path.cwd() / "public" / "index.html"]:
-        if p.exists():
-            return p.read_text(encoding="utf-8")
-    try:
-        from embedded_index import INDEX_HTML
-        return INDEX_HTML
-    except ImportError:
-        return None
-
-
-@app.get("/", response_class=HTMLResponse)
-@app.get("/analysis", response_class=HTMLResponse)
-@app.get("/dashboard", response_class=HTMLResponse)
-def serve_frontend():
-    """Serve React app."""
-    html = _get_index_html()
-    return html or """<!DOCTYPE html><html><body><h1>Loading...</h1></body></html>"""
-
-
-@app.get("/static/{path:path}")
-def serve_static(path: str):
-    """Serve static assets."""
-    base = _find_static_base()
-    if not base:
-        raise HTTPException(status_code=404, detail="Static files not found")
-    file_path = (base / path).resolve()
-    if not str(file_path).startswith(str(base.resolve())) or not file_path.exists():
-        raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(file_path)
 
 
 @app.post("/api/create_link_token")
@@ -155,7 +113,7 @@ async def create_link_token():
     try:
         request = LinkTokenCreateRequest(
             products=[Products('transactions')],
-            country_codes=[CountryCode('CA')], # Specifically for Canada
+            country_codes=[CountryCode('CA')],  # Specifically for Canada
             language='en',
             user=LinkTokenCreateRequestUser(client_user_id='unique-user-id-123'),
             client_name="Canada Wealth Dashboard"
@@ -169,6 +127,8 @@ async def create_link_token():
     except Exception as e:
         logger.error(f"Link token error: {e}")
         raise HTTPException(status_code=500, detail="Failed to create bank link. Ensure the backend is configured with valid Plaid credentials.")
+
+
 @app.post("/api/exchange_public_token")
 async def exchange_public_token(payload: dict = Body(...)):
     public_token = payload.get("public_token")
@@ -176,16 +136,12 @@ async def exchange_public_token(payload: dict = Body(...)):
         return {"error": "No public token provided"}
 
     try:
-        # This is the "Magic" step: Swapping the temporary token for a permanent key
         exchange_request = ItemPublicTokenExchangeRequest(
             public_token=public_token
         )
         exchange_response = client.item_public_token_exchange(exchange_request)
-        
-        # In a real app, you would save this 'access_token' to a database
         access_token = exchange_response['access_token']
         item_id = exchange_response['item_id']
-        
         print(f"✅ Success! Access Token: {access_token}")
         return {"status": "success", "item_id": item_id, "access_token": access_token}
     except plaid.ApiException as e:
@@ -201,7 +157,6 @@ async def upload_statement(request: Request):
     """Accept 1–12 PDF bank statements, parse and return combined transactions."""
     logger.info("=== UPLOAD STATEMENT(S) ===")
     form = await request.form()
-    # Accept both "statements" (plural) and "statement" (single, legacy)
     statements = form.getlist("statements") or form.getlist("statement")
     statements = [s for s in statements if s and hasattr(s, "read")]
 
@@ -278,7 +233,6 @@ async def analyze_transactions_endpoint(payload: dict = Body(...)):
 def _plaid_to_common(txn: dict) -> dict:
     """Convert Plaid transaction to common format. Plaid: + = outflow, - = inflow."""
     amount = float(txn.get("amount", 0))
-    # Our format: + = income, - = expense
     normalized_amount = -amount
     cat = None
     if "personal_finance_category" in txn and txn["personal_finance_category"]:
@@ -310,7 +264,6 @@ async def get_plaid_transactions(payload: dict = Body(...)):
             end_date=end,
         )
         resp = client.transactions_get(req)
-        # Plaid returns dict-like with 'transactions' key
         raw = resp.to_dict() if hasattr(resp, "to_dict") else dict(resp)
         plaid_txns = raw.get("transactions", [])
         transactions = [_plaid_to_common(t) for t in plaid_txns]
@@ -329,7 +282,6 @@ def _get_user_from_token(authorization: str = None):
     jwks_url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json" if supabase_url else None
 
     try:
-        # New Supabase projects use ES256/RS256 with JWKS
         if jwks_url:
             jwks_client = jwt.PyJWKClient(jwks_url)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
@@ -344,7 +296,6 @@ def _get_user_from_token(authorization: str = None):
     except Exception:
         pass
 
-    # Fallback: legacy HS256 with JWT secret (older Supabase projects)
     secret = os.getenv("SUPABASE_JWT_SECRET")
     if secret:
         try:
@@ -477,17 +428,6 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/{path:path}", response_class=HTMLResponse)
-def serve_spa_catchall(path: str):
-    """SPA fallback - must be last."""
-    if path.startswith("api/") or path.startswith("static/"):
-        raise HTTPException(status_code=404, detail="Not found")
-    html = _get_index_html()
-    if html:
-        return html
-    raise HTTPException(status_code=404, detail="Not found")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 {
-  "buildCommand": "python build_embed.py",
-  "outputDirectory": "public",
   "rewrites": [
-    { "source": "/((?!api/|static/).*)", "destination": "/index.html" }
+    { "source": "/api/(.*)", "destination": "/api/index.py" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
