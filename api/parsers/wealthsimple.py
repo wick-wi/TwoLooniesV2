@@ -8,7 +8,7 @@ from typing import Any
 
 import pdfplumber
 
-from parsers.base import (
+from .base import (
     AMOUNT_PATTERN,
     PAREN_AMOUNT_PATTERN,
     SIGNED_AMOUNT_PATTERN,

@@ -6,8 +6,8 @@ from typing import Any
 
 import pdfplumber
 
-from parsers.generic import parse_generic
-from parsers.wealthsimple import parse_wealthsimple
+from .generic import parse_generic
+from .wealthsimple import parse_wealthsimple
 
 logger = logging.getLogger(__name__)
 

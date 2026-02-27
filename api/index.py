@@ -1,14 +1,11 @@
 import json
 import logging
 import os
-import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
-# Add project root for imports (analysis, pdf_parser, supabase_client, parsers)
 _ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_ROOT))
 
 # Log to console; skip file logging on Vercel (read-only filesystem)
 IS_VERCEL = os.environ.get("VERCEL") == "1"
@@ -60,10 +57,10 @@ from plaid.model.transactions_get_request import TransactionsGetRequest
 
 import jwt
 
-from analysis import analyze_transactions
-from pdf_parser import parse_statement
+from .analysis import analyze_transactions
+from .pdf_parser import parse_statement
 try:
-    from supabase_client import supabase
+    from .supabase_client import supabase
 except ImportError:
     supabase = None
 
