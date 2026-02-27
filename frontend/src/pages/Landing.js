@@ -106,8 +106,12 @@ export default function Landing() {
       {/* Header with logo */}
       <header className="relative z-10 pt-8 px-6 sm:px-8 lg:px-12">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#EAB308] shrink-0" aria-hidden />
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo.png"
+              alt="Two Loonie"
+              className="h-8 w-auto sm:h-9"
+            />
             <span className="font-bold text-lg sm:text-xl tracking-tight">Two Loonie</span>
           </div>
           <div className="flex items-center gap-3">
@@ -142,6 +146,11 @@ export default function Landing() {
       <main className="relative z-10 flex flex-col items-center px-6 sm:px-8 py-12 sm:py-16 lg:py-20">
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto mb-10 sm:mb-12">
+          <img
+            src="/logo.png"
+            alt="Two Loonie"
+            className="h-36 sm:h-[10.5rem] lg:h-48 w-auto mx-auto mb-6 sm:mb-8"
+          />
           <h1 className="font-bold text-4xl sm:text-5xl lg:text-6xl tracking-tighter mb-4 sm:mb-5">
             Your Canadian Wealth, Visualized.
           </h1>
