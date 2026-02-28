@@ -13,6 +13,7 @@ import UploadStatementModal from '../components/UploadStatementModal';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
+import logo from '../assets/logo.png';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
@@ -110,7 +111,7 @@ export default function Landing() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img
-              src="/logo.png"
+              src={logo}
               alt="Two Loonie"
               className="h-8 w-auto sm:h-9"
             />
@@ -149,7 +150,7 @@ export default function Landing() {
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto mb-10 sm:mb-12">
           <img
-            src="/logo.png"
+            src={logo}
             alt="Two Loonie"
             className="h-36 sm:h-[10.5rem] lg:h-48 w-auto mx-auto mb-6 sm:mb-8"
           />
