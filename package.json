@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "cd frontend && npm install && npm run build && mkdir -p ../public && cp -r build/* ../public/"
+    "build": "cd frontend && npm install && npm run build && mkdir -p ../public && cp -r build/* ../public/",
+    "supabase:start": "npx supabase start",
+    "supabase:stop": "npx supabase stop",
+    "supabase:status": "npx supabase status"
+  },
+  "devDependencies": {
+    "supabase": "^2.76.15"
   }
 }

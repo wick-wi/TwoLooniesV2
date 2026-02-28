@@ -38,7 +38,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 env_path = _ROOT / ".env"
+env_local = _ROOT / ".env.local"
 load_dotenv(dotenv_path=env_path)
+if env_local.exists():
+    load_dotenv(dotenv_path=env_local, override=True)
 
 print("--- SYSTEM CHECK ---")
 print(f"Looking for .env at: {env_path}")

@@ -12,6 +12,7 @@ import {
 import UploadStatementModal from '../components/UploadStatementModal';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
+import ForgotPasswordModal from '../components/ForgotPasswordModal';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
@@ -40,6 +41,7 @@ export default function Landing() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showSignUpModal, setShowSignUpModal] = useState(false);
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
 
   useEffect(() => {
     if (location.state?.showLogin) setShowLoginModal(true);
@@ -268,6 +270,20 @@ export default function Landing() {
           switchToSignUp={() => {
             setShowLoginModal(false);
             setShowSignUpModal(true);
+          }}
+          switchToForgotPassword={() => {
+            setShowLoginModal(false);
+            setShowForgotPasswordModal(true);
+          }}
+        />
+      )}
+
+      {showForgotPasswordModal && (
+        <ForgotPasswordModal
+          onClose={() => setShowForgotPasswordModal(false)}
+          switchToLogin={() => {
+            setShowForgotPasswordModal(false);
+            setShowLoginModal(true);
           }}
         />
       )}

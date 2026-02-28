@@ -5,6 +5,7 @@ import { AnalysisProvider } from './context/AnalysisContext';
 import Landing from './pages/Landing';
 import Analysis from './pages/Analysis';
 import Dashboard from './pages/Dashboard';
+import ResetPassword from './pages/ResetPassword';
 import './App.css';
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/analysis" element={<Analysis />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
           </Routes>
         </BrowserRouter>
       </AnalysisProvider>

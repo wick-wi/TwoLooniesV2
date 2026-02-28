@@ -44,6 +44,21 @@ export function AuthProvider({ children }) {
     await supabase.auth.signOut();
   };
 
+  const resetPasswordForEmail = async (email) => {
+    if (!supabase) throw new Error('Supabase not configured');
+    const redirectTo = `${window.location.origin}/reset-password`;
+    const { data, error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+    if (error) throw error;
+    return data;
+  };
+
+  const updatePassword = async (newPassword) => {
+    if (!supabase) throw new Error('Supabase not configured');
+    const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    return data;
+  };
+
   const getAccessToken = () => session?.access_token ?? null;
 
   return (
@@ -56,6 +71,8 @@ export function AuthProvider({ children }) {
         signIn,
         signUp,
         signOut,
+        resetPasswordForEmail,
+        updatePassword,
         getAccessToken,
       }}
     >
