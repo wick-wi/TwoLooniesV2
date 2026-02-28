@@ -1,13 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { usePlaidLink } from 'react-plaid-link';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import UploadStatementModal from '../components/UploadStatementModal';
-import { FileText, Trash2, RefreshCw, Plus } from 'lucide-react';
+import { FileText, Trash2, RefreshCw, Plus, Landmark } from 'lucide-react';
 import './Dashboard.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
+
+function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
+  const { open, ready } = usePlaidLink({ token: linkToken, onSuccess });
+  return (
+    <button
+      type="button"
+      onClick={() => open()}
+      disabled={!ready}
+      className={className}
+    >
+      {children}
+    </button>
+  );
+}
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -19,8 +34,54 @@ export default function Dashboard() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [rerunning, setRerunning] = useState(false);
+  const [linkToken, setLinkToken] = useState(null);
+  const [linkTokenError, setLinkTokenError] = useState(null);
 
   const token = getAccessToken?.();
+
+  const fetchLinkToken = useCallback(async () => {
+    setLinkTokenError(null);
+    try {
+      const res = await axios.post(`${API_BASE}/api/create_link_token`);
+      setLinkToken(res.data.link_token);
+    } catch (err) {
+      console.error('Link token error:', err);
+      const msg = err.response?.data?.error || err.response?.data?.detail || err.message || 'Could not connect to bank linking service.';
+      setLinkTokenError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLinkToken();
+  }, [fetchLinkToken]);
+
+  const onPlaidSuccess = useCallback(async (public_token) => {
+    if (!token) return;
+    try {
+      const exchangeRes = await axios.post(`${API_BASE}/api/exchange_public_token`, { public_token });
+      const access_token = exchangeRes.data?.access_token;
+      const item_id = exchangeRes.data?.item_id;
+      if (!access_token) throw new Error('No access token returned');
+      const txRes = await axios.post(`${API_BASE}/api/transactions`, { access_token });
+      if (txRes.data.error) throw new Error(txRes.data.error);
+      const analysisData = { ...txRes.data, access_token, item_id };
+      setAnalysisData(analysisData);
+      await axios.post(
+        `${API_BASE}/api/save_analysis`,
+        {
+          source: 'plaid',
+          summary: txRes.data.analysis || {},
+          access_token,
+          item_id: item_id || 'unknown',
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      navigate('/analysis');
+    } catch (err) {
+      console.error('Plaid flow error:', err);
+      setError(err.response?.data?.error || err.message || 'Something went wrong.');
+    }
+  }, [token, setAnalysisData, navigate]);
 
   const fetchUserData = useCallback(async () => {
     if (!token) return;
@@ -135,9 +196,6 @@ export default function Dashboard() {
         <div className="dashboard-header-inner">
           <h1>Your Dashboard</h1>
           <div className="dashboard-actions">
-            <button onClick={() => navigate('/')} className="btn-header">
-              Home
-            </button>
             <button onClick={handleLogout} className="btn-header btn-outline">
               Log out
             </button>
@@ -159,6 +217,23 @@ export default function Dashboard() {
             <div className="statements-header">
               <h2>Your Statements</h2>
               <div className="statements-actions">
+                {linkToken ? (
+                  <PlaidConnectButton
+                    linkToken={linkToken}
+                    onSuccess={onPlaidSuccess}
+                    className="btn-plaid-dash"
+                  >
+                    <Landmark size={18} /> Connect Bank
+                  </PlaidConnectButton>
+                ) : linkTokenError ? (
+                  <button onClick={fetchLinkToken} className="btn-secondary-dash">
+                    Retry Connect Bank
+                  </button>
+                ) : (
+                  <button disabled className="btn-secondary-dash opacity-60">
+                    Loading...
+                  </button>
+                )}
                 <button
                   onClick={() => setShowUploadModal(true)}
                   className="btn-primary-dash"
@@ -180,10 +255,32 @@ export default function Dashboard() {
             {statements.length === 0 ? (
               <div className="statements-empty">
                 <FileText size={48} strokeWidth={1} className="statements-empty-icon" />
-                <p>No statements yet. Upload PDF bank statements to get started.</p>
-                <button onClick={() => setShowUploadModal(true)} className="btn-primary-dash">
-                  <Plus size={18} /> Upload Statement
-                </button>
+                <p>No statements yet. Connect your bank or upload PDF statements to get started.</p>
+                <div className="statements-empty-actions">
+                  {linkToken ? (
+                    <PlaidConnectButton
+                      linkToken={linkToken}
+                      onSuccess={onPlaidSuccess}
+                      className="btn-primary-dash"
+                    >
+                      <Landmark size={18} /> Connect Bank Account
+                    </PlaidConnectButton>
+                  ) : linkTokenError ? (
+                    <button onClick={fetchLinkToken} className="btn-secondary-dash">
+                      Retry Connect Bank
+                    </button>
+                  ) : (
+                    <button disabled className="btn-secondary-dash opacity-60">
+                      Loading Plaid...
+                    </button>
+                  )}
+                  <button onClick={() => setShowUploadModal(true)} className="btn-primary-dash">
+                    <Plus size={18} /> Upload Statement
+                  </button>
+                </div>
+                {linkTokenError && (
+                  <p className="statements-empty-error">{linkTokenError}</p>
+                )}
               </div>
             ) : (
               <ul className="statements-list">

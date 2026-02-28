@@ -27,7 +27,11 @@ export default function ForgotPasswordModal({ onClose, switchToLogin }) {
       await resetPasswordForEmail(email);
       setSent(true);
     } catch (err) {
-      setError(err.message || 'Failed to send reset link.');
+      const msg = err.message || 'Failed to send reset link.';
+      const isRateLimit = /rate limit|too many/i.test(msg);
+      setError(isRateLimit
+        ? 'Too many reset requests. Please wait 10–15 minutes before trying again.'
+        : msg);
     } finally {
       setLoading(false);
     }
