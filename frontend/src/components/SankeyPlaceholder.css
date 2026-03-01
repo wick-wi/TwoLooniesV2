@@ -1,0 +1,68 @@
+.sankey-placeholder {
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+}
+
+.sankey-placeholder-svg {
+  width: 100%;
+  height: auto;
+  color: #64748b;
+}
+
+.sankey-node {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: rgba(255, 255, 255, 0.15);
+  stroke-width: 1;
+}
+
+.sankey-income {
+  fill: rgba(251, 191, 36, 0.2);
+  stroke: rgba(251, 191, 36, 0.4);
+}
+
+.sankey-expenses {
+  fill: rgba(248, 113, 113, 0.15);
+  stroke: rgba(248, 113, 113, 0.35);
+}
+
+.sankey-savings {
+  fill: rgba(52, 211, 153, 0.15);
+  stroke: rgba(52, 211, 153, 0.35);
+}
+
+.sankey-flow {
+  fill: rgba(100, 116, 139, 0.25);
+  stroke: rgba(100, 116, 139, 0.4);
+  stroke-width: 1;
+}
+
+.sankey-flow-1 {
+  fill: rgba(248, 113, 113, 0.2);
+  stroke: rgba(248, 113, 113, 0.3);
+}
+
+.sankey-flow-2 {
+  fill: rgba(52, 211, 153, 0.2);
+  stroke: rgba(52, 211, 153, 0.3);
+}
+
+.sankey-label {
+  fill: #94a3b8;
+  font-size: 11px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+}
+
+.sankey-placeholder-label {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.sankey-placeholder-hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
