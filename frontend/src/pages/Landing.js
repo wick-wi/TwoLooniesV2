@@ -13,7 +13,7 @@ import UploadStatementModal from '../components/UploadStatementModal';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
-import logo from '../assets/logo.png';
+import logo from '../logo.svg';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 

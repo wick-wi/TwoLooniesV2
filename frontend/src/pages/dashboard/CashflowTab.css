@@ -1,0 +1,49 @@
+.cashflow-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.cashflow-tab-section-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.cashflow-tab-sankey-wrapper {
+  padding: 1.5rem;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.cashflow-tab-list {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cashflow-tab-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cashflow-tab-item:last-child {
+  border-bottom: none;
+}
+
+.cashflow-tab-category {
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.cashflow-tab-amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #94a3b8;
+}
