@@ -7,7 +7,6 @@
 create table if not exists public.profiles (
   id uuid references auth.users primary key,
   display_name text,
-  address text,
   birth_date date, -- For age-based cohort comparison
   province text check (province in ('AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'ON', 'PE', 'QC', 'SK', 'NT', 'NU', 'YT')), -- Canadian context
   created_at timestamptz default now()
@@ -59,7 +58,6 @@ create table if not exists public.transactions (
   is_duplicate boolean default false,
   is_transfer boolean default false, -- For Sankey/Internal transfer filter
   is_fixed_cost boolean default false, -- For Fixed vs Variable split
-  needs_review boolean default false, -- E-transfer, uncategorized
   created_at timestamptz default now()
 );
 

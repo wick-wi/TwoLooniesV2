@@ -8,8 +8,10 @@ export default function DashboardTab() {
     netWorth,
     runwayMonths,
     runwayLabel,
+    runwayAvgSpend,
     personalInflation,
     inflationTrend,
+    inflationCategory,
     profileCompletionPercent,
     profileCompletionLabel,
     aiInsights,
@@ -38,7 +40,7 @@ export default function DashboardTab() {
 
       {/* Hero Metric Cards */}
       <section className="dashboard-tab-hero-grid">
-        <div className="glass-card dashboard-tab-hero-card">
+        <div className="glass-card dashboard-tab-hero-card dashboard-tab-hero-card-networth">
           <h3 className="dashboard-tab-hero-label">Net Worth</h3>
           <p className="dashboard-tab-hero-value">{formatCurrency(netWorth.current)}</p>
           <span className="dashboard-tab-badge">{netWorth.cohort.label}</span>
@@ -46,13 +48,14 @@ export default function DashboardTab() {
 
         <div className="glass-card dashboard-tab-hero-card">
           <h3 className="dashboard-tab-hero-label">{runwayLabel}</h3>
-          <p className="dashboard-tab-hero-value dashboard-tab-hero-runway">{runwayMonths} Months</p>
+          <p className="dashboard-tab-hero-value">{runwayMonths} Months</p>
+          <span className="dashboard-tab-badge">Avg. monthly spend: {formatCurrency(runwayAvgSpend)}</span>
         </div>
 
         <div className="glass-card dashboard-tab-hero-card">
           <h3 className="dashboard-tab-hero-label">Personal Inflation</h3>
           <div className="dashboard-tab-inflation-row">
-            <p className="dashboard-tab-hero-value dashboard-tab-hero-inflation">
+            <p className="dashboard-tab-hero-value">
               +{personalInflation}% YoY
             </p>
             {inflationTrend === 'up' ? (
@@ -61,6 +64,9 @@ export default function DashboardTab() {
               <TrendingDown className="dashboard-tab-trend-icon dashboard-tab-trend-down" aria-hidden />
             )}
           </div>
+          <span className="dashboard-tab-badge">
+            Highest: {inflationCategory.name} +{inflationCategory.change}%
+          </span>
         </div>
       </section>
 

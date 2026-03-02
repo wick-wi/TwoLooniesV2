@@ -1,0 +1,88 @@
+{
+  "categories": [
+    {
+        "id": "credit_card_payment",
+        "name": "Credit Card Payment",
+        "tier1": "Income",
+        "keywords": ["MASTERCARD", "VISA"]
+      },
+    {
+      "id": "income",
+      "name": "Income",
+      "tier1": "Income",
+      "keywords": ["PAYROLL", "DIRECT DEP", "GST/HST", "EI PAYMENT", "DIVIDEND", "INTEREST EARNED", "TAX REFUND"]
+    },
+    {
+      "id": "housing",
+      "name": "Housing",
+      "tier1": "Fixed",
+      "keywords": ["RENT", "MORTGAGE", "CONDO", "PROPERTY TAX", "HYDRO", "ENBRIDGE", "TORONTO WATER", "RELIANCE"]
+    },
+    {
+      "id": "utilities_comm",
+      "name": "Utilities & Phone",
+      "tier1": "Fixed",
+      "keywords": ["ROGERS", "BELL", "TELUS", "FIDO", "KUDO", "TEKSAVVY", "PUBLIC MOBILE", "CHATR"]
+    },
+    {
+      "id": "food_grocery",
+      "name": "Groceries",
+      "tier1": "Variable",
+      "keywords": ["LOBLAWS", "METRO", "NO FRILLS", "SOBEYS", "COSTCO", "WAL-MART", "FRESHCO", "FARM BOY", "LONGOS"]
+    },
+    {
+      "id": "food_dining",
+      "name": "Dining & Coffee",
+      "tier1": "Variable",
+      "keywords": ["TIM HORTONS", "STARBUCKS", "UBER EATS", "DOORDASH", "MCDONALDS", "RESTO", "PUB", "BAR", "A&W", "SUBWAY"]
+    },
+    {
+      "id": "transport",
+      "name": "Transport & Auto",
+      "tier1": "Fixed",
+      "keywords": ["PRESTO", "TTC", "GO TRANSIT", "SHELL", "PETRO CAN", "ESSO", "UBER TRIP", "LYFT", "407 ETR", "CAA", "INTACT", "AVIVA", "DESJARDINS INS"]
+    },
+    {
+      "id": "etransfer",
+      "name": "E-Transfer",
+      "tier1": "Financial",
+      "keywords": ["INTERAC E-TRF", "E-TRANSFER", "EMAIL TRF"]
+    },
+    {
+      "id": "debt_interest",
+      "name": "Debt & Interest",
+      "tier1": "Fixed",
+      "keywords": ["INTEREST CHARGE", "LINE OF CREDIT", "OSAP", "LOAN PYMT", "CREDIT CARD PYMT"]
+    },
+    {
+      "id": "entertainment",
+      "name": "Entertainment & Subs",
+      "tier1": "Variable",
+      "keywords": ["NETFLIX", "SPOTIFY", "DISNEY PLUS", "AMAZON PRIME", "APPLE.COM/BILL", "YOUTUBEPREM", "CINEPLEX", "EVENTBRITE", "TICKETMASTER"]
+    },
+    {
+      "id": "travel",
+      "name": "Travel",
+      "tier1": "Variable",
+      "keywords": ["AIR CANADA", "WESTJET", "EXPEDIA", "AIRBNB", "HOTEL", "VIA RAIL", "FLAIR AIR", "PORTER AIR"]
+    },
+    {
+      "id": "household",
+      "name": "Household & Shopping",
+      "tier1": "Variable",
+      "keywords": ["IKEA", "HOME DEPOT", "CANADIAN TIRE", "AMAZON.CA", "WAYFAIR", "STRUCTUBE", "LEONS", "THE BRICK", "INDIGO", "WINNERS"]
+    },
+    {
+      "id": "health_wellness",
+      "name": "Health & Wellness",
+      "tier1": "Variable",
+      "keywords": ["SHOPPERS DRUG MART", "REXALL", "GOODLIFE", "FIT4LESS", "DENTIST", "OPTICAL", "REMEDY'S"]
+    },
+    {
+      "id": "financial",
+      "name": "Financial & Investing",
+      "tier1": "Financial",
+      "keywords": ["TRANSFER", "WS CASH", "WEALTHSIMPLE", "QUESTRADE", "CRA-ADX", "SERVICE ONTARIO"]
+    }
+  ]
+}

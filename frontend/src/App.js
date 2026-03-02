@@ -10,6 +10,7 @@ import DashboardTab from './pages/dashboard/DashboardTab';
 import WealthTab from './pages/dashboard/WealthTab';
 import CashflowTab from './pages/dashboard/CashflowTab';
 import DataEditorTab from './pages/dashboard/DataEditorTab';
+import ProfileTab from './pages/dashboard/ProfileTab';
 import './App.css';
 
 function LandingRoute() {
@@ -49,6 +50,7 @@ function App() {
               <Route path="wealth" element={<WealthTab />} />
               <Route path="cashflow" element={<CashflowTab />} />
               <Route path="data-editor" element={<DataEditorTab />} />
+              <Route path="profile" element={<ProfileTab />} />
             </Route>
           </Routes>
         </BrowserRouter>

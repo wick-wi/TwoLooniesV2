@@ -3,7 +3,6 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { LayoutDashboard, PiggyBank, TrendingUp, Database } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import ProfileMenu from './ProfileMenu';
-import logo from '../logo.svg';
 import './DashboardShell.css';
 
 const navItems = [
@@ -29,7 +28,7 @@ export default function DashboardShell() {
       <header className="dashboard-shell-header">
         <div className="dashboard-shell-header-inner">
           <div className="flex items-center gap-3">
-            <img src={logo} alt="" className="dashboard-shell-logo" aria-hidden />
+            <img src="/logo.png?v=2" alt="" className="dashboard-shell-logo" aria-hidden />
             <span className="font-bold text-lg tracking-tight">Two Loonie</span>
           </div>
           <ProfileMenu onLogout={handleLogout} />

@@ -15,8 +15,10 @@ export const mockData = {
   },
   runwayMonths: 6.4,
   runwayLabel: 'Personal Runway',
+  runwayAvgSpend: 5400,
   personalInflation: 4.2,
   inflationTrend: 'up', // or 'down'
+  inflationCategory: { name: 'Food', change: 8.2 },
 
   // Progress nudge
   profileCompletionPercent: 35,

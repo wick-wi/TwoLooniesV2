@@ -206,6 +206,10 @@
   text-align: right;
 }
 
+.data-editor-table td:first-child {
+  white-space: nowrap;
+}
+
 .data-editor-table .amount-positive {
   color: #34d399;
 }

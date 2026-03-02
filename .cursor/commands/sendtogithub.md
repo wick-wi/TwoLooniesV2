@@ -1,5 +1,5 @@
 do the following terminal commands
-
+git 
 git .add
 git -m commit with an appropriate comment
 git push
