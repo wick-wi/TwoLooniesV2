@@ -186,6 +186,11 @@ export default function DataEditorTab() {
       setError('Supabase is not configured or you are not signed in.');
       return;
     }
+    const token = getAccessToken();
+    if (!token) {
+      setError('Session expired. Please sign out and sign in again.');
+      return;
+    }
     setCategorizing(true);
     setError(null);
     setCategorizeSuccess(null);
@@ -195,6 +200,7 @@ export default function DataEditorTab() {
       for (let round = 0; round < maxRounds; round++) {
         const { data, error: fnError } = await supabase.functions.invoke('categorize-transaction', {
           body: { user_id: user.id },
+          headers: { Authorization: `Bearer ${token}` },
         });
         if (fnError) {
           let message = fnError.message || 'Categorize request failed';
