@@ -134,11 +134,18 @@ serve(async (req) => {
       return jsonResponse({ error: "Missing or invalid Authorization header" }, 401);
     }
 
+    // Defensive body parsing: avoid req.json() on empty body (e.g. OPTIONS preflight
+    // misrouted or runtime parsing) which can throw "Unexpected end of JSON input".
+    const contentLength = req.headers.get("Content-Length");
+    const rawBody = await req.text();
+    if (contentLength === "0" || !rawBody || rawBody.trim() === "") {
+      return jsonResponse({ error: "Invalid or empty JSON body" }, 400);
+    }
     let body: RequestBody;
     try {
-      body = (await req.json()) as RequestBody;
+      body = JSON.parse(rawBody) as RequestBody;
     } catch {
-      return jsonResponse({ error: "Invalid JSON body" }, 400);
+      return jsonResponse({ error: "Invalid or empty JSON body" }, 400);
     }
 
     const userId = body?.user_id;
