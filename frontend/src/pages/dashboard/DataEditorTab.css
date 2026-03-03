@@ -13,6 +13,15 @@
   font-size: 0.9rem;
 }
 
+.data-editor-success {
+  padding: 1rem 1.25rem;
+  background: rgba(74, 222, 128, 0.15);
+  border: 1px solid rgba(74, 222, 128, 0.4);
+  border-radius: 0.5rem;
+  color: #86efac;
+  font-size: 0.9rem;
+}
+
 .data-editor-section-title {
   margin: 0 0 0.75rem;
   font-size: 1.125rem;

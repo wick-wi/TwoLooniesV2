@@ -46,6 +46,7 @@ export default function DataEditorTab() {
   const [deletingId, setDeletingId] = useState(null);
   const [rerunning, setRerunning] = useState(false);
   const [categorizing, setCategorizing] = useState(false);
+  const [categorizeSuccess, setCategorizeSuccess] = useState(null);
   const [linkToken, setLinkToken] = useState(null);
   const [linkTokenError, setLinkTokenError] = useState(null);
 
@@ -187,6 +188,7 @@ export default function DataEditorTab() {
     }
     setCategorizing(true);
     setError(null);
+    setCategorizeSuccess(null);
     try {
       let totalUpdated = 0;
       const maxRounds = 20;
@@ -208,8 +210,16 @@ export default function DataEditorTab() {
         totalUpdated += data?.updated ?? 0;
         if (!data?.has_more) break;
       }
+      const message =
+        totalUpdated === 0
+          ? 'No uncategorized transactions to update.'
+          : totalUpdated === 1
+            ? 'Categorized 1 transaction.'
+            : `Categorized ${totalUpdated} transactions.`;
+      setCategorizeSuccess(message);
       await fetchUserData();
     } catch (err) {
+      setCategorizeSuccess(null);
       setError(err.message || 'Failed to categorize transactions');
     } finally {
       setCategorizing(false);
@@ -252,6 +262,11 @@ export default function DataEditorTab() {
       {error && (
         <div className="data-editor-error">
           {error}
+        </div>
+      )}
+      {categorizeSuccess && (
+        <div className="data-editor-success">
+          {categorizeSuccess}
         </div>
       )}
 
