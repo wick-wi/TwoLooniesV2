@@ -13,8 +13,6 @@ import UploadStatementModal from '../components/UploadStatementModal';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
-import logo from '../logo.svg';
-
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
 function PlaidButton({ token, onSuccess }) {
@@ -111,9 +109,9 @@ export default function Landing() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img
-              src={logo}
+              src="/logo.png?v=2"
               alt="Two Loonie"
-              className="h-8 w-auto sm:h-9"
+              className="h-[2.8rem] w-auto sm:h-[3.15rem]"
             />
             <span className="font-bold text-lg sm:text-xl tracking-tight">Two Loonie</span>
           </div>
@@ -150,9 +148,9 @@ export default function Landing() {
         {/* Hero */}
         <section className="text-center max-w-2xl mx-auto mb-10 sm:mb-12">
           <img
-            src={logo}
+            src="/logo.png?v=2"
             alt="Two Loonie"
-            className="h-36 sm:h-[10.5rem] lg:h-48 w-auto mx-auto mb-6 sm:mb-8"
+            className="h-[12.6rem] sm:h-[14.7rem] lg:h-[16.8rem] w-auto mx-auto mb-6 sm:mb-8"
           />
           <h1 className="font-bold text-4xl sm:text-5xl lg:text-6xl tracking-tighter mb-4 sm:mb-5">
             Your Canadian Wealth, Visualized.

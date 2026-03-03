@@ -1,8 +1,10 @@
 import json
 import logging
 import os
+import re
 import tempfile
-from datetime import date, timedelta
+from collections import defaultdict
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +64,7 @@ import jwt
 
 from .analysis import analyze_transactions
 from .pdf_parser import parse_statement
+from .utils.categorization import categorize_transaction
 try:
     from .supabase_client import supabase
 except ImportError:
@@ -192,6 +195,11 @@ async def upload_statement(request: Request):
 
     transactions = all_transactions
     logger.info("Total transactions across all statements: %d", len(transactions))
+
+    # Apply categorization before analysis
+    cat_count, flagged_count = _apply_categorization(transactions)
+    logger.info("Categorized %d transactions, %d flagged for review", cat_count, flagged_count)
+
     if transactions:
         logger.info("First 10 transactions: %s", json.dumps(transactions[:10], indent=2, default=str))
         if len(transactions) > 10:
@@ -217,7 +225,17 @@ async def upload_statement(request: Request):
     logger.info("=== END UPLOAD ===")
     file_logger.info("=== END UPLOAD ===")
 
-    return {"transactions": transactions, "analysis": analysis, "source": "pdf", "files": files_breakdown}
+    processing_summary = {
+        "transactions_categorized": cat_count,
+        "flagged_for_review": flagged_count,
+    }
+    return {
+        "transactions": transactions,
+        "analysis": analysis,
+        "source": "pdf",
+        "files": files_breakdown,
+        "processing_summary": processing_summary,
+    }
 
 
 @app.post("/api/analyze_transactions")
@@ -273,6 +291,141 @@ async def get_plaid_transactions(payload: dict = Body(...)):
         return {"error": str(e)}
 
 
+def _apply_categorization(transactions: list[dict]) -> tuple[int, int]:
+    """
+    Apply categorization to each transaction. Mutates transactions in place.
+    Returns (transactions_categorized, flagged_for_review).
+    """
+    categorized = 0
+    flagged = 0
+    for t in transactions:
+        desc = t.get("description") or t.get("clean_merchant") or "Unknown"
+        result = categorize_transaction(desc)
+        t["category"] = result.get("category_name", result.get("category_id"))
+        t["category_id"] = result["category_id"]
+        t["tier1"] = result["tier1"]
+        t["is_fixed_cost"] = result.get("is_fixed_cost", False)
+        needs_review = result["category_id"] in ("etransfer", "uncategorized")
+        t["needs_review"] = needs_review
+        categorized += 1
+        if needs_review:
+            flagged += 1
+    return categorized, flagged
+
+
+def _strip_date_prefix_from_description(desc: str | None) -> str:
+    """Remove leading date-like fragments (e.g. '20 20' from PDF table extraction artifacts)."""
+    if not desc:
+        return "Unknown"
+    s = str(desc).strip()
+    # Strip leading "20 20", "2020 03 31", "31 03 20" etc. (space-separated date fragments)
+    s = re.sub(r"^\d{1,4}\s+\d{1,2}(\s+\d{1,2})?\s+", "", s).strip()
+    return s or "Unknown"
+
+
+def _normalize_date_for_db(date_val: str | None) -> str | None:
+    """Convert various date formats to YYYY-MM-DD for PostgreSQL. Avoids datestyle ambiguity (e.g. 25-03-31)."""
+    if not date_val:
+        return None
+    s = str(date_val).strip()
+    if not s:
+        return None
+    formats = [
+        "%Y-%m-%d", "%y-%m-%d",  # 2025-03-31, 25-03-31
+        "%d/%m/%Y", "%d/%m/%y", "%d-%m-%Y", "%d-%m-%y",
+        "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%m-%d-%y",
+        "%Y/%m/%d", "%y/%m/%d",
+        "%d %b %Y", "%d %B %Y", "%d %b %y",
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(s[:12].strip(), fmt)
+            return dt.strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _detect_internal_transfers(db_transactions: list[dict], user_id: str) -> set[tuple[str, str]]:
+    """
+    Find pairs of transactions that look like internal transfers between accounts.
+    Outgoing (amount < 0) in one account matches incoming (amount > 0) in another, same amount, within ±3 days.
+    Returns set of (txn_id_out, txn_id_in) pairs.
+    """
+    from datetime import datetime as dt
+
+    by_account: dict[str, list[dict]] = defaultdict(list)
+    for t in db_transactions:
+        aid = t.get("account_id")
+        if aid:
+            by_account[aid].append(t)
+
+    pairs = set()
+    account_ids = list(by_account.keys())
+    for i, aid_a in enumerate(account_ids):
+        for aid_b in account_ids[i + 1 :]:  # noqa: E203
+            outgoings = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_a] if float(t.get("amount", 0) or 0) < 0]
+            incomings = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_b] if float(t.get("amount", 0) or 0) > 0]
+            for tout, amt_out in outgoings:
+                for tin, amt_in in incomings:
+                    if abs(abs(amt_out) - amt_in) < 0.02:  # epsilon for float
+                        dout = tout.get("date")
+                        din = tin.get("date")
+                        if dout and din:
+                            try:
+                                d1 = dt.strptime(str(dout)[:10], "%Y-%m-%d").date()
+                                d2 = dt.strptime(str(din)[:10], "%Y-%m-%d").date()
+                                if abs((d1 - d2).days) <= 3:
+                                    tid_out, tid_in = tout.get("id"), tin.get("id")
+                                    if tid_out and tid_in:
+                                        pairs.add((tid_out, tid_in))
+                            except (ValueError, TypeError):
+                                pass
+            outgoings_b = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_b] if float(t.get("amount", 0) or 0) < 0]
+            incomings_a = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_a] if float(t.get("amount", 0) or 0) > 0]
+            for tout, amt_out in outgoings_b:
+                for tin, amt_in in incomings_a:
+                    if abs(abs(amt_out) - amt_in) < 0.02:
+                        dout, din = tout.get("date"), tin.get("date")
+                        if dout and din:
+                            try:
+                                d1 = dt.strptime(str(dout)[:10], "%Y-%m-%d").date()
+                                d2 = dt.strptime(str(din)[:10], "%Y-%m-%d").date()
+                                if abs((d1 - d2).days) <= 3:
+                                    tid_out, tid_in = tout.get("id"), tin.get("id")
+                                    if tid_out and tid_in:
+                                        pairs.add((tid_out, tid_in))
+                            except (ValueError, TypeError):
+                                pass
+    return pairs
+
+
+def _get_or_create_import_account(user_id: str) -> str:
+    """Get or create a default 'Imported Statements' account for PDF uploads. Returns account_id."""
+    resp = supabase.table("accounts").select("id").eq("user_id", user_id).execute()
+    for acc in (resp.data or []):
+        if acc.get("name") and "Imported" in acc["name"]:
+            return acc["id"]
+    ins = supabase.table("accounts").insert({
+        "user_id": user_id,
+        "name": "Imported Statements",
+        "account_type": "Chequing",
+        "provider": "PDF Upload",
+    }).execute()
+    return ins.data[0]["id"]
+
+
+def _db_txn_to_analysis(t: dict) -> dict:
+    """Convert DB transaction row to analysis format."""
+    return {
+        "id": t.get("id"),
+        "date": str(t.get("date", "")) if t.get("date") else "",
+        "description": _strip_date_prefix_from_description(t.get("description") or t.get("clean_merchant")),
+        "amount": float(t.get("amount", 0)),
+        "category": t.get("category"),
+    }
+
+
 def _get_user_from_token(authorization: str = None):
     """Extract and verify Supabase JWT, return user_id. Supports both JWKS (ES256/RS256) and legacy HS256."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -312,49 +465,52 @@ async def save_analysis(
     payload: dict = Body(...),
     authorization: str = Header(None, alias="Authorization"),
 ):
-    """Save analysis to Supabase. Requires Bearer token from Supabase Auth."""
-    user_id = _get_user_from_token(authorization)
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-    source = payload.get("source", "pdf")
-    summary = payload.get("summary", {})
-    access_token = payload.get("access_token")
+    """No-op for backward compatibility. analyses/plaid_items tables were removed in favor of
+    column-based accounts, statements, and transactions. Analysis is computed on-the-fly from transactions."""
+    _get_user_from_token(authorization)
+    return {"status": "saved"}
+
+
+@app.get("/api/categories")
+async def get_categories():
+    """Return the shared categories JSON (used by PDF parser and AI categorizer). No auth required."""
+    path = _ROOT / "api" / "data" / "categories.json"
+    if not path.exists():
+        raise HTTPException(status_code=500, detail="categories.json not found")
     try:
-        supabase.table("analyses").insert({
-            "user_id": user_id,
-            "source": source,
-            "summary": summary,
-        }).execute()
-        if access_token:
-            item_id = payload.get("item_id") or "unknown"
-            supabase.table("plaid_items").upsert({
-                "user_id": user_id,
-                "access_token": access_token,
-                "item_id": item_id,
-            }, on_conflict="user_id").execute()
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "saved"}
 
 
 @app.get("/api/user_data")
 async def get_user_data(authorization: str = Header(None, alias="Authorization")):
-    """Fetch user's saved statements and computed analysis. Requires Bearer token."""
+    """Fetch user's accounts, statements, transactions and computed analysis. Requires Bearer token."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
-        resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
-        statements = resp.data or []
-        all_transactions = []
+        accounts_resp = supabase.table("accounts").select("*").eq("user_id", user_id).execute()
+        accounts = accounts_resp.data or []
+
+        stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
+        statements = stmt_resp.data or []
+
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        tx_by_stmt = defaultdict(list)
+        for t in db_transactions:
+            sid = t.get("statement_id")
+            if sid:
+                tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
-            txns = s.get("transactions") or []
-            if isinstance(txns, list):
-                all_transactions.extend(txns)
-            else:
-                all_transactions.extend(txns) if hasattr(txns, "__iter__") else []
+            s["transactions"] = tx_by_stmt.get(s["id"], [])
+
         analysis = analyze_transactions(all_transactions)
-        return {"statements": statements, "transactions": all_transactions, "analysis": analysis, "source": "pdf"}
+        return {"accounts": accounts, "statements": statements, "transactions": all_transactions, "analysis": analysis, "source": "pdf"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -364,7 +520,7 @@ async def save_statements(
     payload: dict = Body(...),
     authorization: str = Header(None, alias="Authorization"),
 ):
-    """Save uploaded statement(s) to Supabase. Each PDF = one row with filename + transactions."""
+    """Save uploaded statement(s) to Supabase. Creates account if needed, inserts user_statements and transactions."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
@@ -372,38 +528,145 @@ async def save_statements(
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="statements must be a non-empty list of {filename, transactions}")
     try:
-        rows = []
+        account_id = _get_or_create_import_account(user_id)
+
+        # Collect all transactions and apply categorization
+        all_txn_rows = []
+        cat_count = 0
+        flagged_count = 0
+
         for item in items:
             fn = item.get("filename") or "statement.pdf"
             txns = item.get("transactions") or []
             if not isinstance(txns, list):
                 txns = []
-            rows.append({"user_id": user_id, "filename": fn, "transactions": txns})
-        supabase.table("user_statements").insert(rows).execute()
-        all_transactions = []
-        for r in rows:
-            all_transactions.extend(r["transactions"])
+
+            c, f = _apply_categorization(txns)
+            cat_count += c
+            flagged_count += f
+
+            start_date = None
+            end_date = None
+            if txns:
+                norm_dates = [_normalize_date_for_db(t.get("date")) for t in txns]
+                valid_dates = [d for d in norm_dates if d]
+                if valid_dates:
+                    start_date = min(valid_dates)
+                    end_date = max(valid_dates)
+
+            stmt_ins = supabase.table("user_statements").insert({
+                "user_id": user_id,
+                "account_id": account_id,
+                "filename": fn,
+                "opening_balance": None,
+                "closing_balance": None,
+                "start_date": start_date,
+                "end_date": end_date,
+            }).execute()
+            statement_id = stmt_ins.data[0]["id"]
+
+            for txn in txns:
+                raw_date = txn.get("date")
+                norm_date = _normalize_date_for_db(raw_date)
+                if not norm_date:
+                    continue
+                desc = _strip_date_prefix_from_description(txn.get("description"))
+                amount = txn.get("amount", 0)
+                txn_row = {
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "statement_id": statement_id,
+                    "date": norm_date,
+                    "description": desc,
+                    "clean_merchant": txn.get("clean_merchant"),
+                    "amount": amount,
+                    "category": txn.get("category"),
+                    "is_fixed_cost": txn.get("is_fixed_cost", False),
+                    "needs_review": txn.get("needs_review", False),
+                }
+                all_txn_rows.append(txn_row)
+
+        # Pre-query existing transactions to count and skip duplicates
+        duplicates_skipped = 0
+        rows_to_upsert = all_txn_rows
+        if all_txn_rows:
+            batch_dates = [r["date"] for r in all_txn_rows]
+            min_d, max_d = min(batch_dates), max(batch_dates)
+            existing = supabase.table("transactions").select("date,amount,description").eq(
+                "account_id", account_id
+            ).gte("date", min_d).lte("date", max_d).execute()
+            existing_sigs = {(str(r["date"]), round(float(r["amount"] or 0), 2), r.get("description") or "") for r in (existing.data or [])}
+            rows_to_upsert = []
+            for row in all_txn_rows:
+                sig = (row["date"], round(float(row["amount"] or 0), 2), row.get("description") or "")
+                if sig in existing_sigs:
+                    duplicates_skipped += 1
+                else:
+                    rows_to_upsert.append(row)
+
+        # Upsert transactions (ignore duplicates to avoid overwriting)
+        for txn_row in rows_to_upsert:
+            supabase.table("transactions").upsert(
+                txn_row,
+                on_conflict="account_id,date,amount,description",
+                ignore_duplicates=True,
+            ).execute()
+
+        # Fetch all user transactions and run transfer detection
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
+        db_transactions = tx_resp.data or []
+        transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
+        transfer_ids = set()
+        for tid_out, tid_in in transfer_pairs:
+            transfer_ids.add(tid_out)
+            transfer_ids.add(tid_in)
+        for tid in transfer_ids:
+            supabase.table("transactions").update({"is_transfer": True}).eq("id", tid).eq("user_id", user_id).execute()
+
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
         analysis = analyze_transactions(all_transactions)
-        return {"status": "saved", "analysis": analysis, "transactions": all_transactions}
+
+        processing_summary = {
+            "transactions_categorized": cat_count,
+            "flagged_for_review": flagged_count,
+            "duplicates_skipped": duplicates_skipped,
+            "transfers_detected": len(transfer_pairs),
+        }
+        return {
+            "status": "saved",
+            "analysis": analysis,
+            "transactions": all_transactions,
+            "processing_summary": processing_summary,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/statements/{statement_id}")
 async def delete_statement(statement_id: str, authorization: str = Header(None, alias="Authorization")):
-    """Delete a statement by id. Recompute and return updated analysis."""
+    """Delete a statement by id (cascades to transactions). Recompute and return updated analysis."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
         supabase.table("user_statements").delete().eq("id", statement_id).eq("user_id", user_id).execute()
-        resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
-        statements = resp.data or []
-        all_transactions = []
+
+        stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
+        statements = stmt_resp.data or []
+
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        tx_by_stmt = defaultdict(list)
+        for t in db_transactions:
+            sid = t.get("statement_id")
+            if sid:
+                tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
-            txns = s.get("transactions") or []
-            if isinstance(txns, list):
-                all_transactions.extend(txns)
+            s["transactions"] = tx_by_stmt.get(s["id"], [])
+
         analysis = analyze_transactions(all_transactions)
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
     except Exception as e:
@@ -412,18 +675,25 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
 
 @app.post("/api/rerun_analysis")
 async def rerun_analysis(authorization: str = Header(None, alias="Authorization")):
-    """Recompute analysis from all saved statements (no changes to statements)."""
+    """Recompute analysis from all saved transactions (no changes to data)."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
-        resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
-        statements = resp.data or []
-        all_transactions = []
+        stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
+        statements = stmt_resp.data or []
+
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        tx_by_stmt = defaultdict(list)
+        for t in db_transactions:
+            sid = t.get("statement_id")
+            if sid:
+                tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
-            txns = s.get("transactions") or []
-            if isinstance(txns, list):
-                all_transactions.extend(txns)
+            s["transactions"] = tx_by_stmt.get(s["id"], [])
+
         analysis = analyze_transactions(all_transactions)
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
     except Exception as e:

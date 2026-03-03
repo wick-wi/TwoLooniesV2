@@ -6,7 +6,7 @@ __pycache__/
 venv/
 .venv/
 logs/
-public/
+/public/
 embedded_index.py
 node_modules/
 .env.local

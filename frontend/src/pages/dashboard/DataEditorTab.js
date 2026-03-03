@@ -5,8 +5,9 @@ import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
 import { useAnalysis } from '../../context/AnalysisContext';
 import UploadStatementModal from '../../components/UploadStatementModal';
-import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload } from 'lucide-react';
+import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles } from 'lucide-react';
 import { mockData } from '../../data/mockData';
+import { supabase } from '../../lib/supabase';
 import './DataEditorTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -36,7 +37,7 @@ function normalizeTransaction(tx, index) {
 
 export default function DataEditorTab() {
   const navigate = useNavigate();
-  const { isAuthenticated, getAccessToken, loading: authLoading } = useAuth();
+  const { isAuthenticated, getAccessToken, user, loading: authLoading } = useAuth();
   const { transactions: contextTx, setAnalysisData, clearAnalysis } = useAnalysis();
   const [statements, setStatements] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +45,8 @@ export default function DataEditorTab() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [rerunning, setRerunning] = useState(false);
+  const [categorizing, setCategorizing] = useState(false);
+  const [categorizeSuccess, setCategorizeSuccess] = useState(null);
   const [linkToken, setLinkToken] = useState(null);
   const [linkTokenError, setLinkTokenError] = useState(null);
 
@@ -128,8 +131,15 @@ export default function DataEditorTab() {
     fetchUserData();
   }, [isAuthenticated, authLoading, fetchUserData, navigate]);
 
-  const handleDeleteStatement = async (id) => {
+  const handleDeleteStatement = async (statement) => {
     if (!token) return;
+    const id = statement?.id ?? statement;
+    const txCount = statement?.transactions?.length ?? 0;
+    const msg =
+      txCount > 0
+        ? `Remove this statement? All ${txCount} transactions from this statement will also be deleted. This cannot be undone.`
+        : 'Remove this statement? This cannot be undone.';
+    if (!window.confirm(msg)) return;
     setDeletingId(id);
     try {
       const res = await axios.delete(`${API_BASE}/api/statements/${id}`, {
@@ -171,6 +181,51 @@ export default function DataEditorTab() {
     }
   };
 
+  const handleCategorizeWithAI = async () => {
+    if (!user?.id || !supabase) {
+      setError('Supabase is not configured or you are not signed in.');
+      return;
+    }
+    setCategorizing(true);
+    setError(null);
+    setCategorizeSuccess(null);
+    try {
+      let totalUpdated = 0;
+      const maxRounds = 20;
+      for (let round = 0; round < maxRounds; round++) {
+        const { data, error: fnError } = await supabase.functions.invoke('categorize-transaction', {
+          body: { user_id: user.id },
+        });
+        if (fnError) {
+          let message = fnError.message || 'Categorize request failed';
+          if (fnError.context && typeof fnError.context.json === 'function') {
+            try {
+              const body = await fnError.context.json();
+              if (body?.error) message = body.error;
+            } catch (_) { /* use fnError.message */ }
+          }
+          throw new Error(message);
+        }
+        if (data?.error) throw new Error(data.error);
+        totalUpdated += data?.updated ?? 0;
+        if (!data?.has_more) break;
+      }
+      const message =
+        totalUpdated === 0
+          ? 'No uncategorized transactions to update.'
+          : totalUpdated === 1
+            ? 'Categorized 1 transaction.'
+            : `Categorized ${totalUpdated} transactions.`;
+      setCategorizeSuccess(message);
+      await fetchUserData();
+    } catch (err) {
+      setCategorizeSuccess(null);
+      setError(err.message || 'Failed to categorize transactions');
+    } finally {
+      setCategorizing(false);
+    }
+  };
+
   const onUploadSuccess = async (data) => {
     if (!token || !data.files?.length) {
       setAnalysisData(data);
@@ -209,6 +264,11 @@ export default function DataEditorTab() {
           {error}
         </div>
       )}
+      {categorizeSuccess && (
+        <div className="data-editor-success">
+          {categorizeSuccess}
+        </div>
+      )}
 
       {/* Actions */}
       <section className="data-editor-actions">
@@ -239,6 +299,15 @@ export default function DataEditorTab() {
               <RefreshCw size={18} className={rerunning ? 'spin' : ''} /> {rerunning ? 'Rerunning...' : 'Rerun Analysis'}
             </button>
           )}
+          <button
+            onClick={handleCategorizeWithAI}
+            disabled={categorizing || !user?.id || !supabase}
+            className="data-editor-btn data-editor-btn-primary"
+            title="Categorize uncategorized transactions using AI"
+          >
+            <Sparkles size={18} className={categorizing ? 'spin' : ''} />
+            {categorizing ? 'Categorizing...' : 'Categorize with AI'}
+          </button>
         </div>
 
         {statements.length === 0 ? (
@@ -275,7 +344,7 @@ export default function DataEditorTab() {
                   <span className="data-editor-statement-meta">{(s.transactions?.length ?? 0)} transactions</span>
                 </div>
                 <button
-                  onClick={() => handleDeleteStatement(s.id)}
+                  onClick={() => handleDeleteStatement(s)}
                   disabled={deletingId === s.id}
                   className="data-editor-btn-remove"
                   aria-label={`Remove ${s.filename}`}
