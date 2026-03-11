@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm install && pip install -r requirements-vercel.txt",
+  "installCommand": "npm install && cp requirements-vercel.txt requirements.txt",
   "rewrites": [
     {
       "source": "/api/(.*)",
