@@ -1,6 +1,11 @@
 """
-Bank statement parsers. Template-by-template support with generic fallback.
+Bank statement parsers. Docling-based extraction with optional LLM (Gemini) for metadata and transactions.
 """
-from .registry import parse_statement
+from .docling_statement import extract_statement_with_llm
+from .account_types_ref import get_valid_account_type_names, get_generates_transactions
 
-__all__ = ["parse_statement"]
+__all__ = [
+    "extract_statement_with_llm",
+    "get_valid_account_type_names",
+    "get_generates_transactions",
+]

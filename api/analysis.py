@@ -28,10 +28,28 @@ def _infer_category(description: str) -> str:
     return "Other"
 
 
+# Refund indicators: positive amounts with these in description reduce expenses
+REFUND_KEYWORDS = ("refund", "credit adjustment", "reversal", "credit", "reversed", "refunded")
+
+
+def _is_refund(t: dict[str, Any]) -> bool:
+    """True if transaction looks like a refund (positive amount + refund-like description)."""
+    amount = float(t.get("amount", 0))
+    if amount <= 0:
+        return False
+    desc = (t.get("description") or t.get("name") or "").lower()
+    cat = (t.get("category") or "").lower()
+    if "refund" in cat:
+        return True
+    return any(kw in desc for kw in REFUND_KEYWORDS)
+
+
 def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Compute detailed analysis from transaction list.
-    Each transaction: { date, description, amount, category? (optional, from Plaid) }
+    Each transaction: { date, description, amount, category?, is_transfer? (excluded from income/expense) }
+    Transfers (is_transfer) are excluded from total_income and total_expenses.
+    Refunds (positive amount + refund-like description) reduce total_expenses.
     """
     if not transactions:
         return {
@@ -51,15 +69,26 @@ def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
     by_month: dict[str, float] = defaultdict(float)
 
     for t in transactions:
-        amount = float(t.get("amount", 0))
+        try:
+            amount = float(t.get("amount", 0) or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
         desc = (t.get("description") or t.get("name") or "Unknown").strip()
         cat = t.get("category") or _infer_category(desc)
         date_str = t.get("date")
+        is_transfer = t.get("is_transfer") is True
+
+        if is_transfer:
+            continue
         if amount > 0:
-            total_income += amount
+            if _is_refund(t):
+                total_expenses -= amount
+            else:
+                total_income += amount
         else:
             total_expenses += abs(amount)
-        by_category[cat] += abs(amount) if amount < 0 else amount
+        if not _is_refund(t):
+            by_category[cat] += abs(amount) if amount < 0 else amount
         if amount < 0:  # expenses count toward merchants
             merchant = _extract_merchant(desc)
             by_merchant[merchant] += abs(amount)

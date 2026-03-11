@@ -1,0 +1,25 @@
+{
+  "account_types": [
+    { "id": "auto_loan", "name": "AutoLoan", "generates_transactions": false, "wealth_type": "Liability" },
+    { "id": "chequing", "name": "Chequing", "generates_transactions": true, "wealth_type": "Liquid Cash" },
+    { "id": "credit_card", "name": "Credit Card", "generates_transactions": true, "wealth_type": "Liability" },
+    { "id": "crypto", "name": "Crypto", "generates_transactions": false, "wealth_type": "Liquid Asset" },
+    { "id": "dpsp", "name": "DPSP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "id": "esop", "name": "ESOP", "generates_transactions": false, "wealth_type": "Liquid Asset" },
+    { "id": "fhsa", "name": "FHSA", "generates_transactions": false, "wealth_type": "Purpose Locked" },
+    { "id": "gic", "name": "GIC", "generates_transactions": false, "wealth_type": "Time Locked" },
+    { "id": "heloc", "name": "HELOC", "generates_transactions": true, "wealth_type": "Liability" },
+    { "id": "line_of_credit", "name": "Line of Credit", "generates_transactions": true, "wealth_type": "Liability" },
+    { "id": "lira", "name": "LIRA", "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "id": "margin", "name": "Margin", "generates_transactions": false, "wealth_type": "Liquid Asset" },
+    { "id": "mortgage", "name": "Mortgage", "generates_transactions": false, "wealth_type": "Liability" },
+    { "id": "rdsp", "name": "RDSP", "generates_transactions": false, "wealth_type": "Purpose Locked" },
+    { "id": "resp", "name": "RESP", "generates_transactions": false, "wealth_type": "Purpose Locked" },
+    { "id": "rpp", "name": "RPP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "id": "rrif", "name": "RRIF", "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "id": "rrsp", "name": "RRSP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "id": "savings", "name": "Savings", "generates_transactions": true, "wealth_type": "Liquid Cash" },
+    { "id": "student_loan", "name": "Student Loan", "generates_transactions": false, "wealth_type": "Liability" },
+    { "id": "tfsa", "name": "TFSA", "generates_transactions": false, "wealth_type": "Liquid Asset" }
+  ]
+}

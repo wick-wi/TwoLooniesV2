@@ -11,3 +11,4 @@ embedded_index.py
 node_modules/
 .env.local
 .env.*.local
+api/parsers/samples/*.pdf

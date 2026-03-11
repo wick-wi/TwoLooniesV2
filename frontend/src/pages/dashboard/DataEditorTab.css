@@ -111,6 +111,114 @@
   color: #fbbf24;
 }
 
+.data-editor-accounts {
+  padding: 0;
+  overflow: hidden;
+}
+
+.data-editor-account-block {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.data-editor-account-block:last-child {
+  border-bottom: none;
+}
+
+.data-editor-account-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1.25rem;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.9rem;
+}
+
+.data-editor-account-name {
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.data-editor-account-number {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-editor-account-type,
+.data-editor-account-provider {
+  color: #94a3b8;
+}
+
+.data-editor-account-block .data-editor-statements {
+  border-top: none;
+}
+
+/* Save confirm modal (account selection) */
+.data-editor-tab .modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.data-editor-tab .modal-content {
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1rem;
+  width: 90%;
+  max-width: 420px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.data-editor-tab .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.data-editor-tab .modal-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.data-editor-tab .modal-close {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.5rem;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #94a3b8;
+  padding: 0.375rem 0.5rem;
+}
+
+.data-editor-tab .modal-body {
+  padding: 1.5rem;
+}
+
+.data-editor-tab .modal-hint {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  color: #94a3b8;
+}
+
+.data-editor-tab .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 .data-editor-statements {
   list-style: none;
   margin: 0;
@@ -225,6 +333,12 @@
 
 .data-editor-table .amount-negative {
   color: #f87171;
+}
+
+.data-editor-table-empty {
+  text-align: center;
+  color: #64748b;
+  padding: 1.5rem !important;
 }
 
 .data-editor-loading {

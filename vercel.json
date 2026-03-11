@@ -1,4 +1,5 @@
 {
+  "installCommand": "npm install && cp requirements-vercel.txt requirements.txt",
   "rewrites": [
     {
       "source": "/api/(.*)",

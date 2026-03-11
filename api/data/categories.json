@@ -1,16 +1,22 @@
 {
   "categories": [
     {
+      "id": "self_transfer",
+      "name": "Self-Transfer",
+      "tier1": "Financial",
+      "keywords": []
+    },
+    {
         "id": "credit_card_payment",
         "name": "Credit Card Payment",
         "tier1": "Income",
-        "keywords": ["MASTERCARD", "VISA"]
+        "keywords": ["MASTERCARD", "VISA", "AMERICAN EXPRESS", "BMO", "BRIM FINANCIAL", "CANADIAN TIRE BANK", "CAPITAL ONE", "CIBC", "COLLABRIA", "DESJARDINS", "EQ BANK", "FAIRSTONE BANK", "HOME TRUST", "ICICI BANK CANADA", "KOHO", "LAURENTIAN BANK", "MBNA", "NATIONAL BANK OF CANADA", "NEO FINANCIAL", "PC FINANCIAL", "RBC", "ROGERS BANK", "SCOTIABANK", "SERVUS CREDIT UNION", "SIMPLII FINANCIAL", "TANGERINE BANK", "TD", "VANCITY", "WEALTHSIMPLE CREDIT"]
       },
     {
       "id": "income",
       "name": "Income",
       "tier1": "Income",
-      "keywords": ["PAYROLL", "DIRECT DEP", "GST/HST", "EI PAYMENT", "DIVIDEND", "INTEREST EARNED", "TAX REFUND"]
+      "keywords": ["PAYROLL", "DIRECT DEP", "GST/HST", "EI PAYMENT", "DIVIDEND", "INTEREST EARNED", "TAX REFUND", "CASH BACK"]
     },
     {
       "id": "housing",
@@ -22,7 +28,7 @@
       "id": "utilities_comm",
       "name": "Utilities & Phone",
       "tier1": "Fixed",
-      "keywords": ["ROGERS", "BELL", "TELUS", "FIDO", "KUDO", "TEKSAVVY", "PUBLIC MOBILE", "CHATR"]
+      "keywords": ["ROGERS", "BELL", "TELUS", "FIDO", "KUDO", "TEKSAVVY", "PUBLIC MOBILE", "CHATR", "ALECTRA UTILITIES", "ALTALINK", "ATCO", "BC HYDRO", "BROOKFIELD RENEWABLE", "BRUCE POWER", "CAPITAL POWER", "CENTRA GAS", "COLLECTIVE WASTE SOLUTIONS", "ELEXICON ENERGY", "EMERA", "ENBRIDGE GAS", "ÉNERGIE NB POWER", "ENMAX", "EPCOR", "FORTISALBERTA", "FORTISBC", "GFL ENVIRONMENTAL", "HYDRO ONE", "HYDRO-QUÉBEC", "MANITOBA HYDRO", "NEWFOUNDLAND AND LABRADOR HYDRO", "NEWFOUNDLAND POWER", "NOVA SCOTIA POWER", "ONTARIO POWER GENERATION", "SASKENERGY", "SASKPOWER", "TC ENERGY", "TORONTO HYDRO", "TRANSALTA", "UNION GAS", "VEOLIA CANADA", "WASTE CONNECTIONS OF CANADA", "WASTE MANAGEMENT", "YUKON ENERGY"]
     },
     {
       "id": "food_grocery",
