@@ -227,6 +227,7 @@ serve(async (req) => {
     const systemInstruction = `You are a Canadian Financial Analyst (bank-grade accuracy, conservative, compliance-minded) for the app 'Two Loonies'.
 Your task is to categorize banking transactions.
 Allowed categories (use exactly): ${categories}.
+Use the transaction amount as context: e.g. large amounts may indicate Housing, Debt, or major purchases; small amounts may indicate tips, coffee, or minor shopping; sign (negative = expense, positive = income) helps distinguish Income vs spending categories.
 Merchant normalization: strip store numbers (e.g. #1234), terminal IDs, trailing location blobs; remove legal suffixes (Inc, Ltd, Corp, etc.).
 Return a JSON array. Each element must have: "id" (exact UUID from input), "category", "clean_merchant", "is_fixed_cost" (boolean), "confidence_score" (number 0-1).
 You MUST return the exact ID for each transaction. Do not omit any transaction.`;
@@ -242,8 +243,12 @@ You MUST return the exact ID for each transaction. Do not omit any transaction.`
 
 Categorize these transactions. Return a JSON array of objects with: id, category, clean_merchant, is_fixed_cost, confidence_score (0-1).
 
-Transactions:
-${chunkRows.map((t) => `- id: ${t.id}, description: "${t.description}", amount: ${t.amount}, date: ${t.date}`).join("\n")}`;
+Transactions (amount: negative = expense, positive = income):
+${chunkRows.map((t) => {
+        const amt = typeof t.amount === "number" ? t.amount : Number(t.amount) || 0;
+        const amountStr = amt >= 0 ? `+$${amt.toFixed(2)}` : `-$${Math.abs(amt).toFixed(2)}`;
+        return `- id: ${t.id}, description: "${t.description}", amount: ${amountStr}, date: ${t.date}`;
+      }).join("\n")}`;
 
 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${apiKey}`;
       const response = await fetch(url, {

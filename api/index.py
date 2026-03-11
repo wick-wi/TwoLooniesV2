@@ -63,8 +63,10 @@ from plaid.model.transactions_get_request import TransactionsGetRequest
 import jwt
 
 from .analysis import analyze_transactions
-from .pdf_parser import parse_statement
-from .utils.categorization import categorize_transaction
+from .docling_client import pdf_to_markdown
+from .parsers.docling_statement import extract_statement_with_llm
+from .parsers.account_types_ref import get_valid_account_type_names, get_generates_transactions
+from .utils.categorization import categorize_transaction, get_category_by_name
 try:
     from .supabase_client import supabase
 except ImportError:
@@ -168,8 +170,12 @@ async def upload_statement(request: Request):
     if len(statements) > MAX_STATEMENTS:
         return {"error": f"Maximum {MAX_STATEMENTS} statements allowed"}
 
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        return {"error": "GOOGLE_API_KEY or GEMINI_API_KEY required for statement extraction (Docling + Gemini)."}
+
     all_transactions = []
     files_breakdown = []
+
     for idx, stmt in enumerate(statements):
         fname = stmt.filename or f"file_{idx}"
         if not fname.lower().endswith(".pdf"):
@@ -183,12 +189,37 @@ async def upload_statement(request: Request):
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                transactions = parse_statement(tmp_path)
+                markdown = pdf_to_markdown(tmp_path)
+                meta, txns_list = extract_statement_with_llm(markdown)
+                provider = meta.get("provider") or "Unknown"
+                account_id_from_stmt = meta.get("account_id")
+                opening_balance = meta.get("opening_balance")
+                closing_balance = meta.get("closing_balance")
+                currency = meta.get("currency") or "CAD"
+                start_date = meta.get("start_date")
+                end_date = meta.get("end_date")
+                account_type = meta.get("account_type") or "Chequing"
+                transactions = txns_list if get_generates_transactions(account_type) else []
+                logger.info("LLM extraction: account_type=%s generates_txns=%s txns=%d", account_type, get_generates_transactions(account_type), len(transactions))
+
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
-            logger.info("Parsed %d transactions from %s", len(transactions), fname)
+
+            logger.info("Parsed %d transactions from %s (provider=%s account_type=%s)", len(transactions), fname, provider, account_type)
             all_transactions.extend(transactions)
-            files_breakdown.append({"filename": fname, "transactions": transactions})
+            files_breakdown.append({
+                "filename": fname,
+                "transactions": transactions,
+                "opening_balance": opening_balance,
+                "closing_balance": closing_balance,
+                "account_id": account_id_from_stmt,
+                "account_type": account_type,
+                "provider": provider,
+                "currency": currency,
+                "start_date": start_date,
+                "end_date": end_date,
+                "extraction_method": "docling_gemini",
+            })
         except Exception as e:
             logger.exception("Failed to parse %s: %s", fname, e)
             return {"error": f"Failed to parse '{fname}': {str(e)}"}
@@ -294,13 +325,24 @@ async def get_plaid_transactions(payload: dict = Body(...)):
 def _apply_categorization(transactions: list[dict]) -> tuple[int, int]:
     """
     Apply categorization to each transaction. Mutates transactions in place.
+    When LLM provided category with confidence >= 0.8, use it; otherwise use keyword-based categorization.
     Returns (transactions_categorized, flagged_for_review).
     """
     categorized = 0
     flagged = 0
     for t in transactions:
         desc = t.get("description") or t.get("clean_merchant") or "Unknown"
-        result = categorize_transaction(desc)
+        confidence = t.get("confidence_score")
+        llm_category = (t.get("category") or "").strip()
+        use_llm = (
+            isinstance(confidence, (int, float))
+            and float(confidence) >= 0.8
+            and llm_category
+            and llm_category.lower() != "uncategorized"
+        )
+        result = get_category_by_name(llm_category) if use_llm else None
+        if result is None:
+            result = categorize_transaction(desc)
         t["category"] = result.get("category_name", result.get("category_id"))
         t["category_id"] = result["category_id"]
         t["tier1"] = result["tier1"]
@@ -401,7 +443,7 @@ def _detect_internal_transfers(db_transactions: list[dict], user_id: str) -> set
 
 
 def _get_or_create_import_account(user_id: str) -> str:
-    """Get or create a default 'Imported Statements' account for PDF uploads. Returns account_id."""
+    """Get or create a default 'Imported Statements' account for PDF uploads. Returns account_id (uuid)."""
     resp = supabase.table("accounts").select("id").eq("user_id", user_id).execute()
     for acc in (resp.data or []):
         if acc.get("name") and "Imported" in acc["name"]:
@@ -412,7 +454,92 @@ def _get_or_create_import_account(user_id: str) -> str:
         "account_type": "Chequing",
         "provider": "PDF Upload",
     }).execute()
+    if not ins or not (getattr(ins, "data", None) and len(ins.data) > 0):
+        raise RuntimeError("Failed to create import account: no data returned from Supabase")
     return ins.data[0]["id"]
+
+
+def _get_or_create_account_by_provider_and_number(
+    user_id: str, provider: str, account_number: str, account_type: str, currency: str
+) -> str:
+    """Get or create account by (user_id, provider, account_number). Returns account id (uuid)."""
+    if not provider or not account_number:
+        return _get_or_create_import_account(user_id)
+    resp = supabase.table("accounts").select("id").eq(
+        "user_id", user_id
+    ).eq("provider", provider).eq("account_number", account_number).maybe_single().execute()
+    if resp and getattr(resp, "data", None) and resp.data and resp.data.get("id"):
+        return resp.data["id"]
+    name = f"{provider} – {account_number}" if provider and account_number else "Imported Statements"
+    ins = supabase.table("accounts").insert({
+        "user_id": user_id,
+        "name": name,
+        "provider": provider,
+        "account_number": account_number,
+        "account_type": account_type or "Chequing",
+        "currency": currency or "CAD",
+    }).execute()
+    if not ins or not (getattr(ins, "data", None) and len(ins.data) > 0):
+        raise RuntimeError("Failed to create account: no data returned from Supabase")
+    return ins.data[0]["id"]
+
+
+def _update_account_number(account_id: str, account_number: str, user_id: str) -> None:
+    """Set account_number on the account row when we have an extracted value from a statement."""
+    if not account_number or not isinstance(account_number, str):
+        return
+    an = str(account_number).strip()
+    if not an:
+        return
+    try:
+        supabase.table("accounts").update({"account_number": an}).eq(
+            "id", account_id
+        ).eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.warning("Failed to update account account_number: %s", e)
+
+
+def _update_account_type(account_id: str, account_type: str, user_id: str) -> None:
+    """Set account_type on the account row when we have an extracted value from a statement. Only updates if valid."""
+    if not account_type or not isinstance(account_type, str):
+        return
+    at = str(account_type).strip()
+    if not at:
+        return
+    valid_types = get_valid_account_type_names()
+    if at not in valid_types:
+        return
+    try:
+        supabase.table("accounts").update({"account_type": at}).eq(
+            "id", account_id
+        ).eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.warning("Failed to update account account_type: %s", e)
+
+
+def _update_account_last_balance(
+    account_id: str, closing_balance: float, end_date: str, user_id: str
+) -> None:
+    """
+    Set account last_balance to statement month-end (closing) balance when the statement's
+    end_date is >= account's balance_as_of_date (so we don't overwrite with an older statement).
+    """
+    if closing_balance is None or not end_date:
+        return
+    try:
+        acc_resp = supabase.table("accounts").select("balance_as_of_date").eq(
+            "id", account_id
+        ).eq("user_id", user_id).maybe_single().execute()
+        current_as_of = (acc_resp.data or {}).get("balance_as_of_date") if acc_resp.data else None
+        if current_as_of is not None and end_date < str(current_as_of):
+            return
+        supabase.table("accounts").update({
+            "last_balance": round(float(closing_balance), 2),
+            "balance_as_of_date": end_date,
+            "balance_last_updated_at": datetime.utcnow().isoformat() + "Z",
+        }).eq("id", account_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.warning("Failed to update account last_balance: %s", e)
 
 
 def _db_txn_to_analysis(t: dict) -> dict:
@@ -520,17 +647,14 @@ async def save_statements(
     payload: dict = Body(...),
     authorization: str = Header(None, alias="Authorization"),
 ):
-    """Save uploaded statement(s) to Supabase. Creates account if needed, inserts user_statements and transactions."""
+    """Save uploaded statement(s) to Supabase. Get-or-create account by (provider, account_number); insert user_statements and transactions only when account type generates_transactions (PRD)."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     items = payload.get("statements", [])
     if not isinstance(items, list) or not items:
-        raise HTTPException(status_code=400, detail="statements must be a non-empty list of {filename, transactions}")
+        raise HTTPException(status_code=400, detail="statements must be a non-empty list of {filename, transactions, provider?, account_id?, ...}")
     try:
-        account_id = _get_or_create_import_account(user_id)
-
-        # Collect all transactions and apply categorization
         all_txn_rows = []
         cat_count = 0
         flagged_count = 0
@@ -541,29 +665,54 @@ async def save_statements(
             if not isinstance(txns, list):
                 txns = []
 
-            c, f = _apply_categorization(txns)
-            cat_count += c
-            flagged_count += f
-
-            start_date = None
-            end_date = None
-            if txns:
+            provider = item.get("provider") or "Unknown"
+            account_number = item.get("account_id") or item.get("account_number")
+            account_type = item.get("account_type") or "Chequing"
+            currency = item.get("currency") or "CAD"
+            start_date = item.get("start_date")
+            end_date = item.get("end_date")
+            if not start_date and txns:
                 norm_dates = [_normalize_date_for_db(t.get("date")) for t in txns]
                 valid_dates = [d for d in norm_dates if d]
                 if valid_dates:
                     start_date = min(valid_dates)
+            if not end_date and txns:
+                norm_dates = [_normalize_date_for_db(t.get("date")) for t in txns]
+                valid_dates = [d for d in norm_dates if d]
+                if valid_dates:
                     end_date = max(valid_dates)
+
+            account_id = _get_or_create_account_by_provider_and_number(
+                user_id, provider, account_number or "", account_type, currency
+            )
+
+            if get_generates_transactions(account_type):
+                c, f = _apply_categorization(txns)
+                cat_count += c
+                flagged_count += f
 
             stmt_ins = supabase.table("user_statements").insert({
                 "user_id": user_id,
                 "account_id": account_id,
                 "filename": fn,
-                "opening_balance": None,
-                "closing_balance": None,
+                "storage_path": None,
+                "opening_balance": item.get("opening_balance"),
+                "closing_balance": item.get("closing_balance"),
                 "start_date": start_date,
                 "end_date": end_date,
+                "provider": provider,
+                "currency": currency,
             }).execute()
+            if not stmt_ins or not (getattr(stmt_ins, "data", None) and len(stmt_ins.data) > 0):
+                raise RuntimeError("Failed to insert user_statement: no data returned from Supabase")
             statement_id = stmt_ins.data[0]["id"]
+
+            closing_balance = item.get("closing_balance")
+            if closing_balance is not None and end_date:
+                _update_account_last_balance(account_id, closing_balance, end_date, user_id)
+
+            if not get_generates_transactions(account_type):
+                txns = []
 
             for txn in txns:
                 raw_date = txn.get("date")
@@ -583,26 +732,37 @@ async def save_statements(
                     "category": txn.get("category"),
                     "is_fixed_cost": txn.get("is_fixed_cost", False),
                     "needs_review": txn.get("needs_review", False),
+                    "currency": currency,
                 }
                 all_txn_rows.append(txn_row)
 
-        # Pre-query existing transactions to count and skip duplicates
+        # Pre-query existing transactions to count and skip duplicates (per account)
         duplicates_skipped = 0
         rows_to_upsert = all_txn_rows
         if all_txn_rows:
+            account_ids_in_batch = list({r["account_id"] for r in all_txn_rows})
             batch_dates = [r["date"] for r in all_txn_rows]
             min_d, max_d = min(batch_dates), max(batch_dates)
-            existing = supabase.table("transactions").select("date,amount,description").eq(
-                "account_id", account_id
-            ).gte("date", min_d).lte("date", max_d).execute()
-            existing_sigs = {(str(r["date"]), round(float(r["amount"] or 0), 2), r.get("description") or "") for r in (existing.data or [])}
+            existing_sigs_by_account = {}
+            for aid in account_ids_in_batch:
+                existing = supabase.table("transactions").select("date,amount,description").eq(
+                    "account_id", aid
+                ).gte("date", min_d).lte("date", max_d).execute()
+                existing_sigs_by_account[aid] = {
+                    (str(r["date"]), round(float(r["amount"] or 0), 2), r.get("description") or "")
+                    for r in (getattr(existing, "data", None) or [])
+                }
             rows_to_upsert = []
             for row in all_txn_rows:
+                aid = row["account_id"]
                 sig = (row["date"], round(float(row["amount"] or 0), 2), row.get("description") or "")
-                if sig in existing_sigs:
+                if existing_sigs_by_account.get(aid, set()) and sig in existing_sigs_by_account[aid]:
                     duplicates_skipped += 1
                 else:
                     rows_to_upsert.append(row)
+                    if aid not in existing_sigs_by_account:
+                        existing_sigs_by_account[aid] = set()
+                    existing_sigs_by_account[aid].add(sig)
 
         # Upsert transactions (ignore duplicates to avoid overwriting)
         for txn_row in rows_to_upsert:
@@ -614,7 +774,7 @@ async def save_statements(
 
         # Fetch all user transactions and run transfer detection
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
-        db_transactions = tx_resp.data or []
+        db_transactions = getattr(tx_resp, "data", None) or []
         transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
         transfer_ids = set()
         for tid_out, tid_in in transfer_pairs:
@@ -624,7 +784,7 @@ async def save_statements(
             supabase.table("transactions").update({"is_transfer": True}).eq("id", tid).eq("user_id", user_id).execute()
 
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
-        db_transactions = tx_resp.data or []
+        db_transactions = getattr(tx_resp, "data", None) or []
         all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
         analysis = analyze_transactions(all_transactions)
 
@@ -646,12 +806,24 @@ async def save_statements(
 
 @app.delete("/api/statements/{statement_id}")
 async def delete_statement(statement_id: str, authorization: str = Header(None, alias="Authorization")):
-    """Delete a statement by id (cascades to transactions). Recompute and return updated analysis."""
+    """Delete a statement by id (cascades to transactions). If it was the last statement for that account, delete the account too. Recompute and return updated analysis."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
+        # Fetch statement to get account_id before deleting (and ensure it exists and belongs to user)
+        get_resp = supabase.table("user_statements").select("account_id").eq("id", statement_id).eq("user_id", user_id).execute()
+        if not get_resp.data or len(get_resp.data) == 0:
+            raise HTTPException(status_code=404, detail="Statement not found")
+        account_id = get_resp.data[0].get("account_id")
+
         supabase.table("user_statements").delete().eq("id", statement_id).eq("user_id", user_id).execute()
+
+        # If this was the last statement for that account, delete the account row
+        if account_id:
+            remaining = supabase.table("user_statements").select("id").eq("account_id", account_id).execute()
+            if not (remaining.data and len(remaining.data) > 0):
+                supabase.table("accounts").delete().eq("id", account_id).eq("user_id", user_id).execute()
 
         stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
         statements = stmt_resp.data or []

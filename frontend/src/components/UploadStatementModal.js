@@ -48,10 +48,15 @@ export default function UploadStatementModal({ onClose, onSuccess }) {
       onSuccess(res.data);
     } catch (err) {
       const detail = err.response?.data?.detail;
-      const msg = err.response?.data?.error
+      const errBody = err.response?.data?.error;
+      let msg = errBody
         || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
+        || (typeof detail === 'string' ? detail : null)
         || err.message
         || 'Upload failed.';
+      if (err.response?.status === 500 && !errBody && !detail) {
+        msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
+      }
       setError(msg);
     } finally {
       setLoading(false);

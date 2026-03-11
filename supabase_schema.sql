@@ -20,10 +20,12 @@ create table if not exists public.accounts (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users not null,
   name text not null, -- e.g., "Main Chequing"
-  account_type text check (account_type in ('Chequing', 'Savings', 'TFSA', 'RRSP', 'FHSA', 'Taxable', 'Credit Card', 'Loan', 'Mortgage')),
+  account_number text, -- from statement parse; unique per user for get-or-create
+  account_type text check (account_type in ('AutoLoan', 'Chequing', 'Credit Card', 'Crypto', 'DPSP', 'ESOP', 'FHSA', 'GIC', 'HELOC', 'Line of Credit', 'LIRA', 'Margin', 'Mortgage', 'RDSP', 'RESP', 'RPP', 'RRIF', 'RRSP', 'Savings', 'Student Loan', 'TFSA')),
   provider text, -- e.g., "TD", "RBC", "Wealthsimple"
   last_balance decimal(12,2) default 0.00,
   balance_last_updated_at timestamptz default now(),
+  balance_as_of_date date, -- statement end_date for this balance; only update when new statement is later
   created_at timestamptz default now()
 );
 
@@ -38,6 +40,7 @@ create table if not exists public.user_statements (
   storage_path text, -- Link to the PDF in Supabase Storage for "Audit" view
   opening_balance decimal(12,2),
   closing_balance decimal(12,2),
+  principal_remaining decimal(12,2), -- Type 3 (Liability) statements
   start_date date,
   end_date date,
   created_at timestamptz default now()

@@ -30,6 +30,21 @@ _UNCATEGORIZED = {
 }
 
 _keyword_cache = None
+_categories_data_cache: list[dict] | None = None
+
+
+def _load_categories_data() -> list[dict]:
+    """Load raw categories list from categories.json. Returns [] on missing file or parse error."""
+    global _categories_data_cache
+    if _categories_data_cache is not None:
+        return _categories_data_cache
+    try:
+        with open(_CATEGORIES_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        _categories_data_cache = data.get("categories", [])
+        return _categories_data_cache
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
 
 
 def _load_keywords() -> list[tuple[str, dict]]:
@@ -37,10 +52,8 @@ def _load_keywords() -> list[tuple[str, dict]]:
     global _keyword_cache
     if _keyword_cache is not None:
         return _keyword_cache
-    with open(_CATEGORIES_PATH, encoding="utf-8") as f:
-        data = json.load(f)
     pairs = []
-    for cat in data.get("categories", []):
+    for cat in _load_categories_data():
         for kw in cat.get("keywords", []):
             kw_upper = kw.strip().upper()
             if kw_upper:
@@ -48,6 +61,31 @@ def _load_keywords() -> list[tuple[str, dict]]:
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
     _keyword_cache = pairs
     return pairs
+
+
+def get_category_names() -> list[str]:
+    """Return sorted list of category display names from categories.json (for LLM prompts)."""
+    names = [c.get("name") for c in _load_categories_data() if c.get("name")]
+    return sorted(names)
+
+
+def get_category_by_name(name: str) -> dict | None:
+    """
+    Look up category by display name. Returns same shape as categorize_transaction(), or None if not found.
+    Matching is case-insensitive after stripping whitespace.
+    """
+    if not name or not str(name).strip():
+        return None
+    key = str(name).strip().lower()
+    for cat in _load_categories_data():
+        if (cat.get("name") or "").strip().lower() == key:
+            return {
+                "category_id": cat["id"],
+                "tier1": cat["tier1"],
+                "is_fixed_cost": cat.get("tier1") == "Fixed",
+                "category_name": cat.get("name", cat["id"]),
+            }
+    return None
 
 
 def _normalize_description(desc: str) -> str:

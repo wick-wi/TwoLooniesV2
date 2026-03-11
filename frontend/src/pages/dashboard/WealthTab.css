@@ -4,6 +4,23 @@
   gap: 1.5rem;
 }
 
+.wealth-tab-loading,
+.wealth-tab-error {
+  padding: 2rem;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.wealth-tab-error {
+  color: #f87171;
+}
+
+.wealth-tab-empty {
+  padding: 1rem 1.25rem;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
 .wealth-tab-section {
   display: flex;
   flex-direction: column;
@@ -24,6 +41,12 @@
   width: 1.25rem;
   height: 1.25rem;
   color: #94a3b8;
+}
+
+.wealth-tab-group-desc {
+  margin: 0 0 0.25rem 0;
+  font-size: 0.8rem;
+  color: #64748b;
 }
 
 .wealth-tab-list {

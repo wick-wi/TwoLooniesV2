@@ -6,7 +6,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useAnalysis } from '../../context/AnalysisContext';
 import UploadStatementModal from '../../components/UploadStatementModal';
 import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles } from 'lucide-react';
-import { mockData } from '../../data/mockData';
 import { supabase } from '../../lib/supabase';
 import './DataEditorTab.css';
 
@@ -40,6 +39,7 @@ export default function DataEditorTab() {
   const { isAuthenticated, getAccessToken, user, loading: authLoading } = useAuth();
   const { transactions: contextTx, setAnalysisData, clearAnalysis } = useAnalysis();
   const [statements, setStatements] = useState([]);
+  const [accountsWithStatements, setAccountsWithStatements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -103,22 +103,29 @@ export default function DataEditorTab() {
     [token, setAnalysisData, navigate]
   );
 
-  const fetchUserData = useCallback(async () => {
+  const fetchUserData = useCallback(async (options = {}) => {
     if (!token) return;
-    setLoading(true);
+    const { background } = options;
+    if (!background) setLoading(true);
     setError(null);
     try {
       const res = await axios.get(`${API_BASE}/api/user_data`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setStatements(res.data.statements || []);
+      const accounts = res.data.accounts || [];
+      const stmts = res.data.statements || [];
+      setAccountsWithStatements(
+        res.data.accounts_with_statements ??
+          accounts.map((acc) => ({ ...acc, statements: stmts.filter((s) => s.account_id === acc.id) }))
+      );
       setAnalysisData(res.data);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to load data');
       setStatements([]);
       clearAnalysis?.();
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }, [token, setAnalysisData, clearAnalysis]);
 
@@ -142,15 +149,11 @@ export default function DataEditorTab() {
     if (!window.confirm(msg)) return;
     setDeletingId(id);
     try {
-      const res = await axios.delete(`${API_BASE}/api/statements/${id}`, {
+      await axios.delete(`${API_BASE}/api/statements/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setStatements(res.data.statements || []);
-      setAnalysisData({
-        transactions: res.data.transactions,
-        analysis: res.data.analysis,
-        source: 'pdf',
-      });
+      // Refetch so we get correct accounts_with_statements (delete response doesn't include it)
+      await fetchUserData({ background: true });
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to delete');
     } finally {
@@ -169,6 +172,7 @@ export default function DataEditorTab() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
       setStatements(res.data.statements || []);
+      setAccountsWithStatements(res.data.accounts_with_statements || []);
       setAnalysisData({
         transactions: res.data.transactions,
         analysis: res.data.analysis,
@@ -233,19 +237,17 @@ export default function DataEditorTab() {
   };
 
   const onUploadSuccess = async (data) => {
+    setShowUploadModal(false);
     if (!token || !data.files?.length) {
       setAnalysisData(data);
-      setShowUploadModal(false);
       return;
     }
     try {
-      await axios.post(`${API_BASE}/api/save_statements`, { statements: data.files }, { headers: { Authorization: `Bearer ${token}` } });
-      setShowUploadModal(false);
-      fetchUserData();
+      const payload = { statements: data.files };
+      await axios.post(`${API_BASE}/api/save_statements`, payload, { headers: { Authorization: `Bearer ${token}` } });
+      await fetchUserData();
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to save statements');
-      setAnalysisData(data);
-      setShowUploadModal(false);
     }
   };
 
@@ -261,13 +263,17 @@ export default function DataEditorTab() {
   const displayTransactions =
     contextTx?.length > 0
       ? contextTx.map((t, i) => normalizeTransaction(t, i)).filter(Boolean)
-      : mockData.recentTransactions;
+      : [];
 
   return (
     <div className="data-editor-tab">
       {error && (
         <div className="data-editor-error">
-          {error}
+          {typeof error === 'object' && error !== null && 'message' in error
+            ? error.message
+            : typeof error === 'object'
+              ? JSON.stringify(error)
+              : error}
         </div>
       )}
       {categorizeSuccess && (
@@ -341,25 +347,45 @@ export default function DataEditorTab() {
             {linkTokenError && <p className="data-editor-empty-error">{linkTokenError}</p>}
           </div>
         ) : (
-          <ul className="glass-card data-editor-statements">
-            {statements.map((s) => (
-              <li key={s.id} className="data-editor-statement-item">
-                <div className="data-editor-statement-info">
-                  <FileText size={20} strokeWidth={1.5} />
-                  <span className="data-editor-statement-filename">{s.filename}</span>
-                  <span className="data-editor-statement-meta">{(s.transactions?.length ?? 0)} transactions</span>
+          <div className="glass-card data-editor-accounts">
+            {accountsWithStatements.map((acc) => (
+              <div key={acc.id} className="data-editor-account-block">
+                <div className="data-editor-account-header">
+                  <span className="data-editor-account-name">{acc.name}</span>
+                  {acc.account_number && (
+                    <span className="data-editor-account-number">••••{acc.account_number.slice(-4)}</span>
+                  )}
+                  <span className="data-editor-account-type">{acc.account_type}</span>
+                  {acc.provider && <span className="data-editor-account-provider">{acc.provider}</span>}
                 </div>
-                <button
-                  onClick={() => handleDeleteStatement(s)}
-                  disabled={deletingId === s.id}
-                  className="data-editor-btn-remove"
-                  aria-label={`Remove ${s.filename}`}
-                >
-                  <Trash2 size={18} /> {deletingId === s.id ? 'Removing...' : 'Remove'}
-                </button>
-              </li>
+                <ul className="data-editor-statements">
+                  {(acc.statements || []).map((s) => (
+                    <li key={s.id} className="data-editor-statement-item">
+                      <div className="data-editor-statement-info">
+                        <FileText size={20} strokeWidth={1.5} />
+                        <span className="data-editor-statement-filename">{s.filename}</span>
+                        <span className="data-editor-statement-meta">
+                          {s.start_date && s.end_date
+                            ? `${formatDate(s.start_date)} – ${formatDate(s.end_date)}`
+                            : (s.transactions?.length ?? 0) > 0
+                              ? `${s.transactions.length} transactions`
+                              : 'Balance / summary (no transaction list)'}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteStatement(s)}
+                        disabled={deletingId === s.id}
+                        className="data-editor-btn-remove"
+                        aria-label={`Remove ${s.filename}`}
+                      >
+                        <Trash2 size={18} /> {deletingId === s.id ? 'Removing...' : 'Remove'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </section>
 
@@ -381,16 +407,24 @@ export default function DataEditorTab() {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayTransactions.map((tx) => (
-                    <tr key={tx.id}>
-                      <td>{formatDate(tx.date)}</td>
-                      <td>{tx.description}</td>
-                      <td className={`text-right ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}`}>
-                        {formatCurrency(tx.amount)}
+                  {displayTransactions.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="data-editor-table-empty">
+                        No transactions yet. Connect your bank or upload statements to see them here.
                       </td>
-                      <td>{tx.category}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    displayTransactions.map((tx) => (
+                      <tr key={tx.id}>
+                        <td>{formatDate(tx.date)}</td>
+                        <td>{tx.description}</td>
+                        <td className={`text-right ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}`}>
+                          {formatCurrency(tx.amount)}
+                        </td>
+                        <td>{tx.category}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

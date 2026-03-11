@@ -3,6 +3,8 @@ plaid-python
 python-dotenv
 uvicorn
 pdfplumber
+docling
+instructor[google-genai]
 python-multipart
 supabase
 PyJWT

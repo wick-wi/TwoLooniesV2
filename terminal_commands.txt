@@ -1,0 +1,24 @@
+
+PROD - GIT COMMANDS
+
+git status
+git add .
+git commit -m "description"
+git switch <branch>
+git push
+
+PROD - SUPABASE
+npx supabase functions deploy categorize_transaction  <function name> 
+--no-verify-jwt (to remove the jwt issue)
+
+
+LOCAL - SUPABASE
+npx supabase functions serve <function name> 
+
+LOCAL - Backend
+uvicorn api.index:app --reload 
+
+LOCAL - Frontend 
+cd frontend 
+npm start
+
