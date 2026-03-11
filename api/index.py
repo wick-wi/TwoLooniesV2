@@ -189,7 +189,7 @@ async def upload_statement(request: Request):
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                markdown = pdf_to_markdown(tmp_path)
+                markdown = pdf_to_markdown(tmp_path, filename=fname)
                 meta, txns_list = extract_statement_with_llm(markdown)
                 provider = meta.get("provider") or "Unknown"
                 account_id_from_stmt = meta.get("account_id")

@@ -7,5 +7,6 @@ uvicorn
 pdfplumber
 instructor[google-genai]
 python-multipart
+requests
 supabase
 PyJWT
