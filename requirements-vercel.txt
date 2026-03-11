@@ -1,0 +1,11 @@
+# Use this on Vercel when DOCLING_MODE=remote and DOCLING_SERVICE_URL point to Docling on Google Cloud.
+# docling is omitted; PDF->markdown runs on the remote service.
+fastapi
+plaid-python
+python-dotenv
+uvicorn
+pdfplumber
+instructor[google-genai]
+python-multipart
+supabase
+PyJWT

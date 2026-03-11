@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from docling.document_converter import DocumentConverter
 from pydantic import BaseModel, Field
 
 # Default PDF path relative to repo root
@@ -198,7 +197,10 @@ def extract_statement_fields(pdf_path: Path, *, use_llm: bool | None = None) -> 
     Convert PDF with Docling to markdown, then extract statement data (metadata + transactions).
     If use_llm is True or GOOGLE_API_KEY/GEMINI_API_KEY is set (and use_llm is not False), uses LLM extraction;
     otherwise uses regex extraction. Returns (result_dict, full_markdown). result_dict includes all metadata fields and a "transactions" list.
+    Only used when running as CLI; API uses docling_client.pdf_to_markdown (remote or local) then extract_statement_with_llm(markdown).
     """
+    from docling.document_converter import DocumentConverter
+
     converter = DocumentConverter()
     result = converter.convert(pdf_path)
     doc = result.document
