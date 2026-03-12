@@ -4,6 +4,7 @@ import { usePlaidLink } from 'react-plaid-link';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useAnalysis } from '../context/AnalysisContext';
+import { useUpload } from '../context/UploadContext';
 import UploadStatementModal from '../components/UploadStatementModal';
 import { FileText, Trash2, RefreshCw, Plus, Landmark } from 'lucide-react';
 import './Dashboard.css';
@@ -24,10 +25,25 @@ function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
   );
 }
 
+function uploadErrorMessage(err) {
+  const detail = err.response?.data?.detail;
+  const errBody = err.response?.data?.error;
+  let msg = errBody
+    || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
+    || (typeof detail === 'string' ? detail : null)
+    || err.message
+    || 'Upload failed.';
+  if (err.response?.status === 500 && !errBody && !detail) {
+    msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
+  }
+  return msg;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const { isAuthenticated, getAccessToken, signOut, loading: authLoading } = useAuth();
   const { analysis, setAnalysisData, clearAnalysis } = useAnalysis();
+  const { startUpload } = useUpload();
   const [statements, setStatements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -380,6 +396,12 @@ export default function Dashboard() {
         <UploadStatementModal
           onClose={() => setShowUploadModal(false)}
           onSuccess={onUploadSuccess}
+          onStartUpload={(promise) =>
+            startUpload(promise, {
+              onSuccess: onUploadSuccess,
+              onError: (err) => setError(uploadErrorMessage(err)),
+            })
+          }
         />
       )}
     </div>

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AnalysisProvider } from './context/AnalysisContext';
+import { UploadProvider } from './context/UploadContext';
 import Landing from './pages/Landing';
 import Analysis from './pages/Analysis';
 import ResetPassword from './pages/ResetPassword';
@@ -40,6 +41,7 @@ function App() {
   return (
     <AuthProvider>
       <AnalysisProvider>
+        <UploadProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<LandingRoute />} />
@@ -54,6 +56,7 @@ function App() {
             </Route>
           </Routes>
         </BrowserRouter>
+        </UploadProvider>
       </AnalysisProvider>
     </AuthProvider>
   );

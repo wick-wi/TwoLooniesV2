@@ -5,7 +5,7 @@ import './UploadStatementModal.css';
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 const MAX_STATEMENTS = 12;
 
-export default function UploadStatementModal({ onClose, onSuccess }) {
+export default function UploadStatementModal({ onClose, onSuccess, onStartUpload }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -32,35 +32,47 @@ export default function UploadStatementModal({ onClose, onSuccess }) {
     setError(null);
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (!files.length) {
       setError('Please select at least one PDF file.');
       return;
     }
-    setLoading(true);
     setError(null);
-    try {
-      const formData = new FormData();
-      files.forEach((file) => formData.append('statements', file));
-      const res = await axios.post(`${API_BASE}/api/upload_statement`, formData);
-      if (res.data.error) throw new Error(res.data.error);
-      onSuccess(res.data);
-    } catch (err) {
-      const detail = err.response?.data?.detail;
-      const errBody = err.response?.data?.error;
-      let msg = errBody
-        || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
-        || (typeof detail === 'string' ? detail : null)
-        || err.message
-        || 'Upload failed.';
-      if (err.response?.status === 500 && !errBody && !detail) {
-        msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
-      }
-      setError(msg);
-    } finally {
-      setLoading(false);
+    const formData = new FormData();
+    files.forEach((file) => formData.append('statements', file));
+    const promise = axios
+      .post(`${API_BASE}/api/upload_statement`, formData)
+      .then((res) => {
+        if (res.data.error) throw new Error(res.data.error);
+        return res.data;
+      });
+
+    if (onStartUpload) {
+      onStartUpload(promise);
+      onClose();
+      return;
     }
+
+    setLoading(true);
+    promise
+      .then((data) => {
+        onSuccess?.(data);
+      })
+      .catch((err) => {
+        const detail = err.response?.data?.detail;
+        const errBody = err.response?.data?.error;
+        let msg = errBody
+          || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
+          || (typeof detail === 'string' ? detail : null)
+          || err.message
+          || 'Upload failed.';
+        if (err.response?.status === 500 && !errBody && !detail) {
+          msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
+        }
+        setError(msg);
+      })
+      .finally(() => setLoading(false));
   };
 
   const handleOverlayClick = (e) => {

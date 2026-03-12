@@ -4,6 +4,7 @@ import { usePlaidLink } from 'react-plaid-link';
 import axios from 'axios';
 import { useAnalysis } from '../context/AnalysisContext';
 import { useAuth } from '../context/AuthContext';
+import { useUpload } from '../context/UploadContext';
 import {
   MapPin,
   Shield,
@@ -34,10 +35,12 @@ export default function Landing() {
   const location = useLocation();
   const { setAnalysisData } = useAnalysis();
   const { isAuthenticated, signOut } = useAuth();
+  const { startUpload } = useUpload();
   const [linkToken, setLinkToken] = useState(null);
   const [, setLinkTokenLoading] = useState(true);
   const [linkTokenError, setLinkTokenError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showSignUpModal, setShowSignUpModal] = useState(false);
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
@@ -85,7 +88,18 @@ export default function Landing() {
   const onUploadSuccess = (data) => {
     setAnalysisData(data);
     setShowUploadModal(false);
+    setUploadError(null);
     navigate('/analysis');
+  };
+
+  const uploadErrorMessage = (err) => {
+    const detail = err.response?.data?.detail;
+    const errBody = err.response?.data?.error;
+    return errBody
+      || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
+      || (typeof detail === 'string' ? detail : null)
+      || err.message
+      || 'Upload failed.';
   };
 
   return (
@@ -193,6 +207,11 @@ export default function Landing() {
                 {linkTokenError}
               </p>
             )}
+            {uploadError && (
+              <p className="mt-3 text-center text-amber-400/90 text-sm" role="alert">
+                {uploadError}
+              </p>
+            )}
             <p className="mt-5 text-center text-slate-500 text-sm">
               🔒 No account required to start. Your data stays private.
             </p>
@@ -251,6 +270,12 @@ export default function Landing() {
         <UploadStatementModal
           onClose={() => setShowUploadModal(false)}
           onSuccess={onUploadSuccess}
+          onStartUpload={(promise) =>
+            startUpload(promise, {
+              onSuccess: onUploadSuccess,
+              onError: (err) => setUploadError(uploadErrorMessage(err)),
+            })
+          }
         />
       )}
 
