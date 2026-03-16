@@ -125,8 +125,12 @@ export default function WealthTab() {
   }, [fetchAccounts]);
 
   const fetchHoldings = useCallback(async (itemId, accountId, currency) => {
-    if (holdingsByKey[itemId] !== undefined) return;
-    setHoldingsByKey((prev) => ({ ...prev, [itemId]: { loading: true } }));
+    let alreadyExists = false;
+    setHoldingsByKey((prev) => {
+      if (prev[itemId] !== undefined) { alreadyExists = true; return prev; }
+      return { ...prev, [itemId]: { loading: true } };
+    });
+    if (alreadyExists) return;
     try {
       const res = await axios.get(`${API_BASE}/api/holdings`, {
         params: { account_id: accountId, currency: currency || 'CAD' },
