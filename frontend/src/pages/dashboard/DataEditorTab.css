@@ -2,6 +2,8 @@
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .data-editor-error {
@@ -287,12 +289,20 @@
   cursor: not-allowed;
 }
 
+.data-editor-transactions {
+  width: 100%;
+  min-width: 0;
+}
+
 .data-editor-table-wrapper {
+  width: 100%;
+  min-width: 0;
   padding: 0;
   overflow: hidden;
 }
 
 .data-editor-table-scroll {
+  width: 100%;
   overflow-x: auto;
 }
 
@@ -341,8 +351,361 @@
   padding: 1.5rem !important;
 }
 
+.data-editor-table .data-editor-row-needs-review {
+  background: rgba(249, 115, 22, 0.08);
+}
+
+/* Processed but kept visible for tagging when "Show only Needs Review" is on */
+.data-editor-table .data-editor-row-processed {
+  opacity: 0.6;
+}
+
+.data-editor-table .data-editor-needs-review-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f97316;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+.data-editor-transactions-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.data-editor-transactions-header .data-editor-section-title {
+  margin: 0;
+}
+
+.data-editor-toggle-needs-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #94a3b8;
+  cursor: pointer;
+  user-select: none;
+}
+
+.data-editor-toggle-needs-review input {
+  cursor: pointer;
+}
+
+.data-editor-clear-filters-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.data-editor-clear-filters-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+}
+
+/* Column header filter buttons */
+.data-editor-th-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s, background 0.15s;
+}
+
+.data-editor-th-filter-btn:hover {
+  color: #fbbf24;
+}
+
+.data-editor-th-filter-btn-right {
+  margin-left: auto;
+}
+
+.data-editor-th-filter-active .data-editor-th-filter-btn {
+  color: #fbbf24;
+}
+
+.data-editor-th-filter-active {
+  background: rgba(251, 191, 36, 0.08);
+  color: #fbbf24;
+}
+
+.data-editor-th-filter-icon {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+/* Filter row (second row in thead) */
+.data-editor-filter-row td {
+  padding: 0.5rem 1rem;
+  vertical-align: middle;
+  background: rgba(0, 0, 0, 0.25);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.data-editor-filter-row-actions {
+  position: sticky;
+  right: 0;
+  width: 80px;
+  min-width: 80px;
+  background: rgba(0, 0, 0, 0.25) !important;
+  box-shadow: -1px 0 0 rgba(255, 255, 255, 0.1);
+  z-index: 2;
+}
+
+.data-editor-filter-cell-active {
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.data-editor-filter-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.data-editor-filter-inputs-right {
+  justify-content: flex-end;
+}
+
+.data-editor-filter-date,
+.data-editor-filter-text,
+.data-editor-filter-number {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.375rem;
+  min-width: 0;
+}
+
+.data-editor-filter-date:focus,
+.data-editor-filter-text:focus,
+.data-editor-filter-number:focus {
+  outline: none;
+  border-color: #f97316;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+}
+
+.data-editor-filter-text {
+  min-width: 160px;
+  flex: 1;
+}
+
+.data-editor-filter-number {
+  width: 5rem;
+}
+
+.data-editor-filter-sep {
+  color: #64748b;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.data-editor-filter-clear-col {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.data-editor-filter-clear-col:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #fca5a5;
+}
+
+/* react-select in filter row */
+.data-editor-filter-inputs .data-editor-filter-select__control {
+  min-width: 140px;
+  flex: 1;
+  max-width: 220px;
+}
+
+.data-editor-table td.data-editor-cell-edit {
+  padding: 0.25rem 0.5rem;
+}
+
+.data-editor-category-select {
+  width: 100%;
+  min-width: 140px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.data-editor-category-select:focus {
+  outline: none;
+  border-color: #f97316;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+}
+
+.data-editor-bulk-prompt {
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 0.5rem;
+}
+
+.data-editor-bulk-prompt-row {
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.data-editor-bulk-prompt-row td {
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0.75rem 1rem;
+}
+
+.data-editor-bulk-prompt-inline {
+  margin-top: 0;
+}
+
+.data-editor-bulk-prompt-text {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  color: #e2e8f0;
+}
+
+.data-editor-bulk-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .data-editor-loading {
   padding: 2rem;
   text-align: center;
   color: #94a3b8;
+}
+
+/* Tags column */
+.data-editor-tags-cell {
+  cursor: pointer;
+  min-width: 120px;
+}
+
+.data-editor-tags-cell-edit {
+  min-width: 200px;
+}
+
+.data-editor-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.data-editor-tag-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  white-space: nowrap;
+}
+
+.data-editor-tags-empty {
+  color: #64748b;
+}
+
+/* Actions column – sticky on the right (stays visible when scrolling horizontally) */
+.data-editor-actions-col,
+.data-editor-actions-cell {
+  position: sticky;
+  right: 0;
+  /* Solid background so scrolling content does not show through */
+  background-color: #0f172a;
+  z-index: 2;
+  /* Left edge separator without border-collapse issues */
+  box-shadow: -1px 0 0 rgba(255, 255, 255, 0.1);
+  width: 80px;
+  min-width: 80px;
+  text-align: center;
+  padding: 0 8px;
+}
+
+.data-editor-actions-col {
+  /* Header stays above body cells when scrolling down and right */
+  z-index: 3;
+  /* Match table header background so sticky header blends */
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.data-editor-actions-cell {
+  vertical-align: middle;
+}
+
+.data-editor-bulk-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-editor-bulk-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fbbf24;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.data-editor-bulk-inline-icon:hover {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fcd34d;
+}
+
+.data-editor-bulk-inline-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.data-editor-bulk-inline-dismiss:hover:not(:disabled) {
+  background: rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+}
+
+.data-editor-bulk-inline-dismiss:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }

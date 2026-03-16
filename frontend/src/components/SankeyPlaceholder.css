@@ -1,6 +1,7 @@
 .sankey-placeholder {
   width: 100%;
-  max-width: 360px;
+  max-width: 480px;
+  margin: 0 auto;
   text-align: center;
 }
 
@@ -31,6 +32,16 @@
   stroke: rgba(52, 211, 153, 0.35);
 }
 
+.sankey-savings-negative {
+  fill: rgba(248, 113, 113, 0.15);
+  stroke: rgba(248, 113, 113, 0.35);
+}
+
+.sankey-credit {
+  fill: rgba(148, 163, 184, 0.2);
+  stroke: rgba(148, 163, 184, 0.4);
+}
+
 .sankey-flow {
   fill: rgba(100, 116, 139, 0.25);
   stroke: rgba(100, 116, 139, 0.4);
@@ -47,6 +58,16 @@
   stroke: rgba(52, 211, 153, 0.3);
 }
 
+.sankey-flow-2-negative {
+  fill: rgba(248, 113, 113, 0.2);
+  stroke: rgba(248, 113, 113, 0.3);
+}
+
+.sankey-flow-credit {
+  fill: rgba(148, 163, 184, 0.25);
+  stroke: rgba(148, 163, 184, 0.4);
+}
+
 .sankey-label {
   fill: #94a3b8;
   font-size: 11px;
@@ -54,15 +75,8 @@
   font-weight: 500;
 }
 
-.sankey-placeholder-label {
-  margin: 0.75rem 0 0.25rem;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #e2e8f0;
-}
-
 .sankey-placeholder-hint {
-  margin: 0;
+  margin: 0.5rem 0 0;
   font-size: 0.75rem;
   color: #64748b;
 }

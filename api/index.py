@@ -65,8 +65,9 @@ import jwt
 from .analysis import analyze_transactions
 from .docling_client import pdf_to_markdown
 from .parsers.docling_statement import extract_statement_with_llm
-from .parsers.account_types_ref import get_valid_account_type_names, get_generates_transactions
+from .parsers.account_types_ref import get_valid_account_type_names, get_generates_transactions, get_plaid_type
 from .utils.categorization import categorize_transaction, get_category_by_name
+from .utils.tags import normalize_tags
 try:
     from .supabase_client import supabase
 except ImportError:
@@ -190,7 +191,7 @@ async def upload_statement(request: Request):
                 tmp_path = tmp.name
             try:
                 markdown = pdf_to_markdown(tmp_path, filename=fname)
-                meta, txns_list = extract_statement_with_llm(markdown)
+                meta, txns_list, holdings_list = extract_statement_with_llm(markdown)
                 provider = meta.get("provider") or "Unknown"
                 account_id_from_stmt = meta.get("account_id")
                 opening_balance = meta.get("opening_balance")
@@ -200,7 +201,13 @@ async def upload_statement(request: Request):
                 end_date = meta.get("end_date")
                 account_type = meta.get("account_type") or "Chequing"
                 transactions = txns_list if get_generates_transactions(account_type) else []
-                logger.info("LLM extraction: account_type=%s generates_txns=%s txns=%d", account_type, get_generates_transactions(account_type), len(transactions))
+                # Credit card statements: expenses are positive, payments negative; flip to app convention (negative = outflow, positive = inflow)
+                if account_type == "Credit Card":
+                    for t in transactions:
+                        amt = t.get("amount")
+                        if amt is not None:
+                            t["amount"] = round(-float(amt), 2)
+                logger.info("LLM extraction: account_type=%s generates_txns=%s txns=%d holdings=%d", account_type, get_generates_transactions(account_type), len(transactions), len(holdings_list))
 
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
@@ -210,6 +217,7 @@ async def upload_statement(request: Request):
             files_breakdown.append({
                 "filename": fname,
                 "transactions": transactions,
+                "holdings": holdings_list,
                 "opening_balance": opening_balance,
                 "closing_balance": closing_balance,
                 "account_id": account_id_from_stmt,
@@ -325,7 +333,8 @@ async def get_plaid_transactions(payload: dict = Body(...)):
 def _apply_categorization(transactions: list[dict]) -> tuple[int, int]:
     """
     Apply categorization to each transaction. Mutates transactions in place.
-    When LLM provided category with confidence >= 0.8, use it; otherwise use keyword-based categorization.
+    - confidence >= 0.8 and not "Uncategorized": use LLM category; else keyword fallback.
+    - needs_review: True for E-Transfer/Uncategorised, or when LLM was used but confidence < 0.9 (user should confirm).
     Returns (transactions_categorized, flagged_for_review).
     """
     categorized = 0
@@ -347,7 +356,9 @@ def _apply_categorization(transactions: list[dict]) -> tuple[int, int]:
         t["category_id"] = result["category_id"]
         t["tier1"] = result["tier1"]
         t["is_fixed_cost"] = result.get("is_fixed_cost", False)
-        needs_review = result["category_id"] in ("etransfer", "uncategorized")
+        needs_review = result["category_id"] in ("etransfer", "uncategorized") or (
+            use_llm and (confidence is None or float(confidence) < 0.9)
+        )
         t["needs_review"] = needs_review
         categorized += 1
         if needs_review:
@@ -363,6 +374,74 @@ def _strip_date_prefix_from_description(desc: str | None) -> str:
     # Strip leading "20 20", "2020 03 31", "31 03 20" etc. (space-separated date fragments)
     s = re.sub(r"^\d{1,4}\s+\d{1,2}(\s+\d{1,2})?\s+", "", s).strip()
     return s or "Unknown"
+
+
+def _description_to_ilike_pattern(desc: str | None) -> str:
+    """Strip trailing numbers, dates, and special chars (*, #) for 'similar' transaction matching.
+    E.g. 'UBER EATS *1234' -> base 'UBER EATS'; return value is base with % and _ escaped + '%'."""
+    if not desc:
+        return "%"
+    s = str(desc).strip()
+    if not s:
+        return "%"
+    # Strip trailing: optional * or #, then digits/spaces; and trailing date-like fragments
+    s = re.sub(r"[\s*#]*\d+[\s*#]*$", "", s)
+    s = re.sub(r"\s+\d{1,4}[-/]\d{1,2}[-/]\d{1,2}\s*$", "", s)
+    s = re.sub(r"\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*$", "", s)
+    s = s.strip()
+    if not s:
+        return "%"
+    # Escape ILIKE special chars: % -> \% , _ -> \_
+    s = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return s + "%"
+
+
+def _is_etransfer(desc: str | None) -> bool:
+    """True if description looks like an e-transfer (memo stripped by bank)."""
+    if not desc or not isinstance(desc, str):
+        return False
+    lower = desc.strip().lower()
+    return "e-transfer" in lower or "etransfer" in lower
+
+
+# Float-safe amount matching for e-transfer similarity (avoid .eq on floats)
+AMOUNT_BUFFER = 0.01
+
+
+def _similar_query_etransfer(supabase_client, user_id: str, transaction_id: str, amount: float):
+    """
+    Return list of all similar e-transfer rows matching description (e-transfer pattern)
+    and amount in [amount - buffer, amount + buffer]. Includes both uncategorised/needs_review
+    and already categorized (count is used for Smart Action; bulk-update still targets only
+    needs_review/uncategorised).
+    """
+    lo = amount - AMOUNT_BUFFER
+    hi = amount + AMOUNT_BUFFER
+    rows_by_id = {}
+    for pattern in ("%e-transfer%", "%etransfer%"):
+        resp = (
+            supabase_client.table("transactions")
+            .select("id, needs_review, category")
+            .eq("user_id", user_id)
+            .neq("id", transaction_id)
+            .ilike("description", pattern)
+            .gte("amount", lo)
+            .lte("amount", hi)
+            .execute()
+        )
+        for r in (resp.data or []):
+            rows_by_id[r["id"]] = r
+    return list(rows_by_id.values())
+
+
+def _is_uncategorised(category) -> bool:
+    """True if category is null, empty, or 'Uncategorized' / 'Uncategorised' (case-insensitive)."""
+    if category is None:
+        return True
+    if not isinstance(category, str):
+        return False
+    s = category.strip().lower()
+    return s in ("", "uncategorized", "uncategorised")
 
 
 def _normalize_date_for_db(date_val: str | None) -> str | None:
@@ -451,7 +530,8 @@ def _get_or_create_import_account(user_id: str) -> str:
     ins = supabase.table("accounts").insert({
         "user_id": user_id,
         "name": "Imported Statements",
-        "account_type": "Chequing",
+        "account_type": "depository",
+        "account_subtype": "Chequing",
         "provider": "PDF Upload",
     }).execute()
     if not ins or not (getattr(ins, "data", None) and len(ins.data) > 0):
@@ -459,25 +539,35 @@ def _get_or_create_import_account(user_id: str) -> str:
     return ins.data[0]["id"]
 
 
+def _normalize_account_number(account_number: str | None) -> str:
+    """Normalize account number by removing spaces and hyphens so '1 3008701' matches '13008701'."""
+    if not account_number or not isinstance(account_number, str):
+        return ""
+    return "".join(account_number.strip().split()).replace("-", "")
+
+
 def _get_or_create_account_by_provider_and_number(
-    user_id: str, provider: str, account_number: str, account_type: str, currency: str
+    user_id: str, provider: str, account_number: str,
+    account_subtype: str, currency: str,
 ) -> str:
-    """Get or create account by (user_id, provider, account_number). Returns account id (uuid)."""
-    if not provider or not account_number:
+    """Get or create account by (user_id, account_number). Returns account id (uuid). Provider is not used for uniqueness."""
+    account_number = _normalize_account_number(account_number)
+    if not account_number:
         return _get_or_create_import_account(user_id)
     resp = supabase.table("accounts").select("id").eq(
         "user_id", user_id
-    ).eq("provider", provider).eq("account_number", account_number).maybe_single().execute()
-    if resp and getattr(resp, "data", None) and resp.data and resp.data.get("id"):
-        return resp.data["id"]
+    ).eq("account_number", account_number).limit(1).execute()
+    if resp and getattr(resp, "data", None) and resp.data and len(resp.data) > 0 and resp.data[0].get("id"):
+        return resp.data[0]["id"]
     name = f"{provider} – {account_number}" if provider and account_number else "Imported Statements"
+    plaid_type = get_plaid_type(account_subtype) or "depository"
     ins = supabase.table("accounts").insert({
         "user_id": user_id,
         "name": name,
         "provider": provider,
         "account_number": account_number,
-        "account_type": account_type or "Chequing",
-        "currency": currency or "CAD",
+        "account_type": plaid_type,
+        "account_subtype": account_subtype or "Chequing",
     }).execute()
     if not ins or not (getattr(ins, "data", None) and len(ins.data) > 0):
         raise RuntimeError("Failed to create account: no data returned from Supabase")
@@ -486,9 +576,7 @@ def _get_or_create_account_by_provider_and_number(
 
 def _update_account_number(account_id: str, account_number: str, user_id: str) -> None:
     """Set account_number on the account row when we have an extracted value from a statement."""
-    if not account_number or not isinstance(account_number, str):
-        return
-    an = str(account_number).strip()
+    an = _normalize_account_number(account_number)
     if not an:
         return
     try:
@@ -499,57 +587,73 @@ def _update_account_number(account_id: str, account_number: str, user_id: str) -
         logger.warning("Failed to update account account_number: %s", e)
 
 
-def _update_account_type(account_id: str, account_type: str, user_id: str) -> None:
-    """Set account_type on the account row when we have an extracted value from a statement. Only updates if valid."""
-    if not account_type or not isinstance(account_type, str):
+def _update_account_type_and_subtype(account_id: str, account_subtype: str, user_id: str) -> None:
+    """Set account_type and account_subtype on the account row. Only updates if the subtype is a valid canonical name."""
+    if not account_subtype or not isinstance(account_subtype, str):
         return
-    at = str(account_type).strip()
-    if not at:
+    st = str(account_subtype).strip()
+    if not st:
         return
     valid_types = get_valid_account_type_names()
-    if at not in valid_types:
+    if st not in valid_types:
         return
+    plaid_type = get_plaid_type(st) or "depository"
     try:
-        supabase.table("accounts").update({"account_type": at}).eq(
-            "id", account_id
-        ).eq("user_id", user_id).execute()
-    except Exception as e:
-        logger.warning("Failed to update account account_type: %s", e)
-
-
-def _update_account_last_balance(
-    account_id: str, closing_balance: float, end_date: str, user_id: str
-) -> None:
-    """
-    Set account last_balance to statement month-end (closing) balance when the statement's
-    end_date is >= account's balance_as_of_date (so we don't overwrite with an older statement).
-    """
-    if closing_balance is None or not end_date:
-        return
-    try:
-        acc_resp = supabase.table("accounts").select("balance_as_of_date").eq(
-            "id", account_id
-        ).eq("user_id", user_id).maybe_single().execute()
-        current_as_of = (acc_resp.data or {}).get("balance_as_of_date") if acc_resp.data else None
-        if current_as_of is not None and end_date < str(current_as_of):
-            return
         supabase.table("accounts").update({
-            "last_balance": round(float(closing_balance), 2),
-            "balance_as_of_date": end_date,
-            "balance_last_updated_at": datetime.utcnow().isoformat() + "Z",
+            "account_type": plaid_type,
+            "account_subtype": st,
         }).eq("id", account_id).eq("user_id", user_id).execute()
     except Exception as e:
-        logger.warning("Failed to update account last_balance: %s", e)
+        logger.warning("Failed to update account type/subtype: %s", e)
+
+
+def _normalize_uuid(value) -> str | None:
+    """Normalize UUID to lowercase string for consistent dict keying."""
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    return s if s else None
+
+
+def _get_latest_balance_per_account_currency(user_id: str) -> dict:
+    """Return dict account_id -> list of { amount, currency, date } (latest by date per account/currency)."""
+    try:
+        bal_resp = supabase.table("balances").select("account_id, amount, currency, date").eq(
+            "user_id", user_id
+        ).order("date", desc=True).execute()
+        rows = getattr(bal_resp, "data", None) or []
+    except Exception:
+        return {}
+    # First row per (account_id, currency) is latest by date; normalize UUID for keying
+    seen = set()
+    result = {}
+    for r in rows:
+        aid = _normalize_uuid(r.get("account_id"))
+        currency = (r.get("currency") or "CAD").strip() or "CAD"
+        key = (aid, currency)
+        if aid and key not in seen:
+            seen.add(key)
+            date_val = r.get("date")
+            result.setdefault(aid, []).append({
+                "amount": float(r.get("amount", 0) or 0),
+                "currency": currency,
+                "date": str(date_val) if date_val else None,
+            })
+    return result
 
 
 def _db_txn_to_analysis(t: dict) -> dict:
-    """Convert DB transaction row to analysis format."""
+    """Convert DB transaction row to analysis format. Includes account_id and is_transfer for Cash Flow filtering."""
     return {
         "id": t.get("id"),
+        "account_id": t.get("account_id"),
         "date": str(t.get("date", "")) if t.get("date") else "",
         "description": _strip_date_prefix_from_description(t.get("description") or t.get("clean_merchant")),
         "amount": float(t.get("amount", 0)),
         "category": t.get("category"),
+        "tags": t.get("tags") or [],
+        "is_transfer": t.get("is_transfer", False),
+        "needs_review": t.get("needs_review", False),
     }
 
 
@@ -611,6 +715,260 @@ async def get_categories():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/tags")
+async def get_tags(authorization: str = Header(None, alias="Authorization")):
+    """Return all unique tags for the authenticated user (via Postgres RPC)."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    resp = supabase.rpc("get_unique_user_tags", {"p_user_id": user_id}).execute()
+    tags = [row["tag"] for row in (resp.data or []) if row.get("tag")]
+    return {"tags": tags}
+
+
+@app.patch("/api/transactions/{transaction_id}/category")
+async def patch_transaction_category(
+    transaction_id: str,
+    payload: dict = Body(...),
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Update a transaction's category and set needs_review=False. Return similar-count for bulk prompt."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    category = payload.get("category")
+    if not category or not str(category).strip():
+        raise HTTPException(status_code=400, detail="category is required")
+    category = str(category).strip()
+
+    # Ensure transaction exists and belongs to user
+    existing = (
+        supabase.table("transactions")
+        .select("id, description, amount")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    data = getattr(existing, "data", None) or []
+    if not data:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    row = data[0]
+    desc = row.get("description") or ""
+    amount_val = float(row.get("amount", 0) or 0)
+
+    # Update category and needs_review
+    supabase.table("transactions").update({
+        "category": category,
+        "needs_review": False,
+    }).eq("id", transaction_id).eq("user_id", user_id).execute()
+
+    # Similar check: Path B (e-transfer) = description + amount range; Path A = description pattern only
+    similar_amount = None
+    if _is_etransfer(desc):
+        similar_rows = _similar_query_etransfer(supabase, user_id, transaction_id, amount_val)
+        similar_count = len(similar_rows)
+        has_similar_pending = similar_count > 0
+        if has_similar_pending:
+            similar_amount = amount_val
+        base = "e-transfer"
+    else:
+        ilike_pattern = _description_to_ilike_pattern(desc)
+        similar_resp = (
+            supabase.table("transactions")
+            .select("id, needs_review, category")
+            .eq("user_id", user_id)
+            .neq("id", transaction_id)
+            .ilike("description", ilike_pattern)
+            .execute()
+        )
+        similar_rows = similar_resp.data or []
+        # Count all similar for Smart Action; bulk-update still only applies to needs_review/uncategorised
+        similar_count = len(similar_rows)
+        has_similar_pending = similar_count > 0
+        base = re.sub(r"[\s*#]*\d+[\s*#]*$", "", str(desc).strip()) if desc else ""
+        base = re.sub(r"\s+\d{1,4}[-/]\d{1,2}[-/]\d{1,2}\s*$", "", base).strip()
+        base = re.sub(r"\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*$", "", base).strip() or (desc or "")
+
+    updated_row = (
+        supabase.table("transactions")
+        .select("*")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    updated_data = getattr(updated_row, "data", None) or []
+    transaction = _db_txn_to_analysis(updated_data[0]) if updated_data else None
+    if transaction is not None:
+        transaction["needs_review"] = False
+
+    out = {
+        "transaction": transaction,
+        "has_similar_pending": has_similar_pending,
+        "similar_count": similar_count,
+        "similar_description": base,
+    }
+    if similar_amount is not None:
+        out["similar_amount"] = similar_amount
+    return out
+
+
+@app.patch("/api/transactions/{transaction_id}/tags")
+async def patch_transaction_tags(
+    transaction_id: str,
+    payload: dict = Body(...),
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Update a transaction's tags. Normalizes before saving. Returns similarity info for unified bulk prompt."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    raw_tags = payload.get("tags")
+    if raw_tags is None:
+        raise HTTPException(status_code=400, detail="tags array is required")
+    tags = normalize_tags(raw_tags)
+
+    existing = (
+        supabase.table("transactions")
+        .select("id, description, amount")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not (getattr(existing, "data", None) or []):
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    row = existing.data[0]
+    desc = row.get("description") or ""
+    amount_val = float(row.get("amount", 0) or 0)
+
+    supabase.table("transactions").update({
+        "tags": tags,
+    }).eq("id", transaction_id).eq("user_id", user_id).execute()
+
+    similar_amount = None
+    if _is_etransfer(desc):
+        similar_rows = _similar_query_etransfer(supabase, user_id, transaction_id, amount_val)
+        similar_count = len(similar_rows)
+        has_similar_pending = similar_count > 0
+        if has_similar_pending:
+            similar_amount = amount_val
+        base = "e-transfer"
+    else:
+        ilike_pattern = _description_to_ilike_pattern(desc)
+        similar_resp = (
+            supabase.table("transactions")
+            .select("id, needs_review, category")
+            .eq("user_id", user_id)
+            .neq("id", transaction_id)
+            .ilike("description", ilike_pattern)
+            .execute()
+        )
+        similar_rows = similar_resp.data or []
+        # Count all similar for Smart Action; bulk-update still only applies to needs_review/uncategorised
+        similar_count = len(similar_rows)
+        has_similar_pending = similar_count > 0
+        base = re.sub(r"[\s*#]*\d+[\s*#]*$", "", str(desc).strip()) if desc else ""
+        base = re.sub(r"\s+\d{1,4}[-/]\d{1,2}[-/]\d{1,2}\s*$", "", base).strip()
+        base = re.sub(r"\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\s*$", "", base).strip() or (desc or "")
+
+    updated_row = (
+        supabase.table("transactions")
+        .select("*")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    updated_data = getattr(updated_row, "data", None) or []
+    transaction = _db_txn_to_analysis(updated_data[0]) if updated_data else None
+    out = {
+        "transaction": transaction,
+        "has_similar_pending": has_similar_pending,
+        "similar_count": similar_count,
+        "similar_description": base,
+    }
+    if similar_amount is not None:
+        out["similar_amount"] = similar_amount
+    return out
+
+
+@app.patch("/api/transactions/bulk-update-category")
+async def bulk_update_transaction_category(
+    payload: dict = Body(...),
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Bulk-update similar transactions. category and tags are both optional; at least one must be provided."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    description = payload.get("description")
+    category = payload.get("category")
+    raw_tags = payload.get("tags")
+    if not description or not str(description).strip():
+        raise HTTPException(status_code=400, detail="description is required")
+    has_category = category and str(category).strip()
+    has_tags = raw_tags is not None
+    if not has_category and not has_tags:
+        raise HTTPException(status_code=400, detail="at least one of category or tags is required")
+    category = str(category).strip() if has_category else None
+    normalized_tags = normalize_tags(raw_tags) if has_tags else None
+    description_str = str(description).strip()
+    payload_amount = payload.get("amount")
+
+    if payload_amount is not None and _is_etransfer(description_str):
+        # Path B: e-transfer – match by description pattern + amount range; update all similar
+        amount_val = float(payload_amount)
+        lo = amount_val - AMOUNT_BUFFER
+        hi = amount_val + AMOUNT_BUFFER
+        rows_by_id = {}
+        for pattern in ("%e-transfer%", "%etransfer%"):
+            match_resp = (
+                supabase.table("transactions")
+                .select("id")
+                .eq("user_id", user_id)
+                .ilike("description", pattern)
+                .gte("amount", lo)
+                .lte("amount", hi)
+                .execute()
+            )
+            for r in (match_resp.data or []):
+                rows_by_id[r["id"]] = True
+        ids = list(rows_by_id.keys())
+    else:
+        # Path A: standard – match by description pattern only; update all similar
+        ilike_pattern = _description_to_ilike_pattern(description_str)
+        match_resp = (
+            supabase.table("transactions")
+            .select("id")
+            .eq("user_id", user_id)
+            .ilike("description", ilike_pattern)
+            .execute()
+        )
+        ids = [r["id"] for r in (match_resp.data or [])]
+    if not ids:
+        # Return full list so the UI does not get wiped when nothing to update
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        return {"updated_count": 0, "transactions": all_transactions}
+
+    update_payload = {}
+    if category is not None:
+        update_payload["category"] = category
+        update_payload["needs_review"] = False
+    if normalized_tags is not None:
+        update_payload["tags"] = normalized_tags
+
+    for tid in ids:
+        supabase.table("transactions").update(
+            update_payload
+        ).eq("id", tid).eq("user_id", user_id).execute()
+
+    # Return updated rows in analysis shape
+    tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+    db_transactions = tx_resp.data or []
+    all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+    return {"updated_count": len(ids), "transactions": all_transactions}
+
+
 @app.get("/api/user_data")
 async def get_user_data(authorization: str = Header(None, alias="Authorization")):
     """Fetch user's accounts, statements, transactions and computed analysis. Requires Bearer token."""
@@ -636,8 +994,97 @@ async def get_user_data(authorization: str = Header(None, alias="Authorization")
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
 
+        balances = []
+        try:
+            bal_resp = supabase.table("balances").select("*").eq("user_id", user_id).order("date", desc=True).execute()
+            balances = getattr(bal_resp, "data", None) or []
+        except Exception:
+            pass
+
         analysis = analyze_transactions(all_transactions)
-        return {"accounts": accounts, "statements": statements, "transactions": all_transactions, "analysis": analysis, "source": "pdf"}
+        return {
+            "accounts": accounts,
+            "statements": statements,
+            "transactions": all_transactions,
+            "analysis": analysis,
+            "balances": balances,
+            "source": "pdf",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/accounts_with_balances")
+async def get_accounts_with_balances(authorization: str = Header(None, alias="Authorization")):
+    """Return accounts for the user with balances (latest per account/currency and date) for Wealth tab."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    try:
+        accounts_resp = supabase.table("accounts").select("id, name, account_type, account_subtype, provider").eq(
+            "user_id", user_id
+        ).order("account_subtype").execute()
+        accounts = accounts_resp.data or []
+        latest_by_account = _get_latest_balance_per_account_currency(user_id)
+        for a in accounts:
+            a["balances"] = latest_by_account.get(_normalize_uuid(a.get("id")), [])
+        return {"accounts": accounts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _get_latest_holdings_snapshot(user_id: str, account_id: str, currency: str) -> tuple[list[dict], str | None]:
+    """Return (list of holding dicts, snapshot_date) for the latest date with holdings for this account/currency."""
+    try:
+        aid = _normalize_uuid(account_id)
+        if not aid:
+            return [], None
+        cur = (currency or "CAD").strip() or "CAD"
+        resp = supabase.table("holdings").select(
+            "asset_symbol, asset_name, quantity, unit_price, total_value, currency, date, is_cash_equivalent"
+        ).eq("user_id", user_id).eq("account_id", aid).eq("currency", cur).order("date", desc=True).execute()
+        rows = getattr(resp, "data", None) or []
+    except Exception:
+        return [], None
+    if not rows:
+        return [], None
+    latest_date = rows[0].get("date")
+    if not latest_date:
+        return [], None
+    snapshot = [
+        {
+            "asset_symbol": r.get("asset_symbol"),
+            "asset_name": r.get("asset_name"),
+            "quantity": float(r.get("quantity", 0) or 0),
+            "unit_price": float(r.get("unit_price", 0) or 0),
+            "total_value": float(r.get("total_value", 0) or 0),
+            "currency": (r.get("currency") or cur).strip() or cur,
+            "date": str(r.get("date")) if r.get("date") else None,
+            "is_cash_equivalent": bool(r.get("is_cash_equivalent", False)),
+        }
+        for r in rows
+        if str(r.get("date")) == str(latest_date)
+    ]
+    return snapshot, str(latest_date)
+
+
+@app.get("/api/holdings")
+async def get_holdings(
+    account_id: str = None,
+    currency: str = "CAD",
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Return latest holdings snapshot for an account/currency. Auth required."""
+    user_id = _get_user_from_token(authorization)
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    try:
+        holdings_list, snapshot_date = _get_latest_holdings_snapshot(user_id, account_id, currency or "CAD")
+        return {"holdings": holdings_list, "date": snapshot_date}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -647,7 +1094,8 @@ async def save_statements(
     payload: dict = Body(...),
     authorization: str = Header(None, alias="Authorization"),
 ):
-    """Save uploaded statement(s) to Supabase. Get-or-create account by (provider, account_number); insert user_statements and transactions only when account type generates_transactions (PRD)."""
+    """Save uploaded statement(s) to Supabase. Get-or-create account by (provider, account_number);
+    branch insertion logic by Plaid type: investment -> balances + holdings, others -> balances + transactions."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
@@ -666,8 +1114,11 @@ async def save_statements(
                 txns = []
 
             provider = item.get("provider") or "Unknown"
-            account_number = item.get("account_id") or item.get("account_number")
-            account_type = item.get("account_type") or "Chequing"
+            account_number = _normalize_account_number(
+                item.get("account_id") or item.get("account_number")
+            )
+            account_subtype = item.get("account_type") or "Chequing"
+            plaid_type = get_plaid_type(account_subtype) or "depository"
             currency = item.get("currency") or "CAD"
             start_date = item.get("start_date")
             end_date = item.get("end_date")
@@ -683,10 +1134,10 @@ async def save_statements(
                     end_date = max(valid_dates)
 
             account_id = _get_or_create_account_by_provider_and_number(
-                user_id, provider, account_number or "", account_type, currency
+                user_id, provider, account_number, account_subtype, currency
             )
 
-            if get_generates_transactions(account_type):
+            if get_generates_transactions(account_subtype):
                 c, f = _apply_categorization(txns)
                 cat_count += c
                 flagged_count += f
@@ -696,22 +1147,67 @@ async def save_statements(
                 "account_id": account_id,
                 "filename": fn,
                 "storage_path": None,
-                "opening_balance": item.get("opening_balance"),
-                "closing_balance": item.get("closing_balance"),
                 "start_date": start_date,
                 "end_date": end_date,
                 "provider": provider,
-                "currency": currency,
             }).execute()
             if not stmt_ins or not (getattr(stmt_ins, "data", None) and len(stmt_ins.data) > 0):
                 raise RuntimeError("Failed to insert user_statement: no data returned from Supabase")
             statement_id = stmt_ins.data[0]["id"]
 
+            # Event-driven ledger: insert point-in-time balances (all account types)
+            opening_balance = item.get("opening_balance")
             closing_balance = item.get("closing_balance")
-            if closing_balance is not None and end_date:
-                _update_account_last_balance(account_id, closing_balance, end_date, user_id)
+            if start_date and opening_balance is not None:
+                supabase.table("balances").insert({
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "statement_id": statement_id,
+                    "amount": round(float(opening_balance), 2),
+                    "currency": currency or "CAD",
+                    "date": start_date,
+                }).execute()
+            if end_date and closing_balance is not None:
+                supabase.table("balances").insert({
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "statement_id": statement_id,
+                    "amount": round(float(closing_balance), 2),
+                    "currency": currency or "CAD",
+                    "date": end_date,
+                }).execute()
 
-            if not get_generates_transactions(account_type):
+            # Investment accounts: insert holdings; integrity check first
+            if plaid_type == "investment":
+                holdings_list = item.get("holdings") or []
+                if holdings_list and closing_balance is not None:
+                    holdings_sum = sum(float(h.get("total_value", 0)) for h in holdings_list)
+                    if abs(holdings_sum - float(closing_balance)) > 0.01:
+                        logger.warning(
+                            "Holdings/balance mismatch for statement %s (account %s): "
+                            "closing_balance=%.2f, holdings_sum=%.2f, diff=%.2f",
+                            statement_id, account_id,
+                            float(closing_balance), holdings_sum,
+                            holdings_sum - float(closing_balance),
+                        )
+                holding_date = end_date or start_date
+                for h in holdings_list:
+                    supabase.table("holdings").insert({
+                        "user_id": user_id,
+                        "account_id": account_id,
+                        "statement_id": statement_id,
+                        "asset_symbol": h.get("asset_symbol") or "CASH",
+                        "asset_name": h.get("asset_name"),
+                        "quantity": float(h.get("quantity", 0)),
+                        "unit_price": float(h.get("unit_price", 0)),
+                        "total_value": float(h.get("total_value", 0)),
+                        "currency": h.get("currency") or currency or "CAD",
+                        "date": holding_date,
+                        "is_cash_equivalent": bool(h.get("is_cash_equivalent", False)),
+                    }).execute()
+
+            # Depository / credit / loan: process transactions if applicable, skip holdings
+            if not get_generates_transactions(account_subtype):
                 txns = []
 
             for txn in txns:

@@ -89,6 +89,24 @@
       "name": "Financial & Investing",
       "tier1": "Financial",
       "keywords": ["TRANSFER", "WS CASH", "WEALTHSIMPLE", "QUESTRADE", "CRA-ADX", "SERVICE ONTARIO"]
+    },
+    {
+      "id": "loans_reimbursements",
+      "name": "Loans & Reimbursements",
+      "tier1": "Financial",
+      "keywords": ["REIMBURSEMENT", "SPLIT", "PAY BACK", "LOAN REPAY", "VENMO", "PAYPAL FRIENDS"]
+    },
+    {
+      "id": "gifts_donations",
+      "name": "Gifts and Donations",
+      "tier1": "Variable",
+      "keywords": ["GIFT", "DONATION", "BIRTHDAY GIFT", "WEDDING GIFT"]
+    },
+    {
+      "id": "career_education",
+      "name": "Career & Education",
+      "tier1": "Variable",
+      "keywords": ["TUITION", "COURSE", "UDEMY", "LINKEDIN LEARNING", "COURSERA", "PLURALSIGHT", "STUDENT FEE", "TEXTBOOK", "SEMINAR", "CONFERENCE", "PROFESSIONAL DEVELOPMENT"]
     }
   ]
 }

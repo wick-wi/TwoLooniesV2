@@ -5,6 +5,7 @@ const AnalysisContext = createContext(null);
 export function AnalysisProvider({ children }) {
   const [analysis, setAnalysis] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [accounts, setAccounts] = useState([]);
   const [source, setSource] = useState(null);
   const [accessToken, setAccessToken] = useState(null);
   const [itemId, setItemId] = useState(null);
@@ -13,6 +14,7 @@ export function AnalysisProvider({ children }) {
   const setAnalysisData = useCallback((data) => {
     setAnalysis(data?.analysis || null);
     setTransactions(data?.transactions || []);
+    setAccounts(data?.accounts ?? []);
     setSource(data?.source || null);
     setAccessToken(data?.access_token || null);
     setItemId(data?.item_id || null);
@@ -22,6 +24,7 @@ export function AnalysisProvider({ children }) {
   const clearAnalysis = useCallback(() => {
     setAnalysis(null);
     setTransactions([]);
+    setAccounts([]);
     setSource(null);
     setAccessToken(null);
     setItemId(null);
@@ -33,6 +36,7 @@ export function AnalysisProvider({ children }) {
       value={{
         analysis,
         transactions,
+        accounts,
         source,
         accessToken,
         itemId,

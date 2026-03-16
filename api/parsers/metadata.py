@@ -1,6 +1,6 @@
 """
 Extract statement metadata from PDF text: account number, account name/type, bank name,
-total account value, principal remaining. Used for account get-or-create and Type 2/3 balance.
+total account value. Used for account get-or-create and Type 2/3 balance.
 """
 import re
 from typing import Any
@@ -59,14 +59,6 @@ MONTH_ABBREVS = (
     "jan", "feb", "mar", "apr", "may", "jun",
     "jul", "aug", "sep", "oct", "nov", "dec",
 )
-# Principal remaining (liability)
-PRINCIPAL_PATTERNS = [
-    re.compile(r"principal\s+remaining\s*:?\s*\$?\s*([\d,]+\.?\d*)", re.I),
-    re.compile(r"principle\s+remaining\s*:?\s*\$?\s*([\d,]+\.?\d*)", re.I),
-    re.compile(r"outstanding\s+principal\s*:?\s*\$?\s*([\d,]+\.?\d*)", re.I),
-]
-
-
 def _sample_text(pdf: pdfplumber.PDF, max_pages: int = 3) -> str:
     """First few pages as single string (lowercase)."""
     parts = []
@@ -174,17 +166,6 @@ def _extract_total_account_value(text: str) -> float | None:
 def _extract_opening_balance(text: str) -> float | None:
     for pat in OPENING_BALANCE_PATTERNS:
         m = pat.search(text)
-        if m:
-            try:
-                return float(m.group(1).replace(",", ""))
-            except (ValueError, TypeError):
-                continue
-    return None
-
-
-def _extract_principal_remaining(text: str) -> float | None:
-    for pat in PRINCIPAL_PATTERNS:
-        m = pat.search(text, re.I)
         if m:
             try:
                 return float(m.group(1).replace(",", ""))
@@ -365,7 +346,7 @@ def extract_statement_metadata(pdf: pdfplumber.PDF, bank_id: str) -> dict[str, A
     """
     Extract metadata from PDF. Returns dict with keys:
     account_number, account_name, account_type, bank_name,
-    total_account_value (closing), opening_balance, principal_remaining (all optional).
+    total_account_value (closing), opening_balance (all optional).
     account_type is one of the reference account types.
     """
     valid_types = get_valid_account_type_names()
@@ -375,7 +356,6 @@ def extract_statement_metadata(pdf: pdfplumber.PDF, bank_id: str) -> dict[str, A
     bank_name = _extract_bank_name(text, bank_id)
     total_value = _extract_total_account_value(text)
     opening = _extract_opening_balance(text)
-    principal = _extract_principal_remaining(text)
     return {
         "account_number": account_number,
         "account_name": account_name or "Account",
@@ -383,7 +363,6 @@ def extract_statement_metadata(pdf: pdfplumber.PDF, bank_id: str) -> dict[str, A
         "bank_name": bank_name,
         "total_account_value": total_value,
         "opening_balance": opening,
-        "principal_remaining": principal,
     }
 
 
@@ -391,7 +370,7 @@ def extract_statement_metadata_from_text(text: str, bank_id: str = "generic") ->
     """
     Extract metadata from plain text (e.g. from Docling export). Returns same dict shape as
     extract_statement_metadata: account_number, account_name, account_type, bank_name,
-    total_account_value (closing), opening_balance, principal_remaining.
+    total_account_value (closing), opening_balance.
     """
     if not text or not isinstance(text, str):
         text = ""
@@ -402,7 +381,6 @@ def extract_statement_metadata_from_text(text: str, bank_id: str = "generic") ->
     bank_name = _extract_bank_name(lower, bank_id)
     total_value = _extract_total_account_value(lower)
     opening = _extract_opening_balance(lower)
-    principal = _extract_principal_remaining(lower)
     return {
         "account_number": account_number,
         "account_name": account_name or "Account",
@@ -410,5 +388,4 @@ def extract_statement_metadata_from_text(text: str, bank_id: str = "generic") ->
         "bank_name": bank_name,
         "total_account_value": total_value,
         "opening_balance": opening,
-        "principal_remaining": principal,
     }
