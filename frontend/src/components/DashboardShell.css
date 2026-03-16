@@ -30,11 +30,13 @@
 }
 
 .dashboard-shell-main {
-  max-width: 720px;
+  max-width: 100%;
+  width: 100%;
   margin: 0 auto;
   padding: 1.5rem;
-  padding-bottom: 7rem; /* pb-28 - clearance for fixed bottom nav */
+  padding-bottom: 7rem; /* clearance for fixed bottom nav */
   min-height: calc(100vh - 60px);
+  box-sizing: border-box;
 }
 
 /* Fixed bottom navigation - z-40 */

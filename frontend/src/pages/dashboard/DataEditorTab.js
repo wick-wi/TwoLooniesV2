@@ -6,11 +6,43 @@ import { useAuth } from '../../context/AuthContext';
 import { useAnalysis } from '../../context/AnalysisContext';
 import { useUpload } from '../../context/UploadContext';
 import UploadStatementModal from '../../components/UploadStatementModal';
-import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles } from 'lucide-react';
+import TransactionTagInput from '../../components/TransactionTagInput';
+import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, Filter } from 'lucide-react';
+import Select from 'react-select';
 import { supabase } from '../../lib/supabase';
 import './DataEditorTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
+
+const filterSelectStyles = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 32,
+    background: 'rgba(15, 23, 42, 0.9)',
+    borderColor: state.isFocused ? '#f97316' : 'rgba(255,255,255,0.2)',
+    boxShadow: state.isFocused ? '0 0 0 2px rgba(249,115,22,0.25)' : 'none',
+    fontSize: '0.85rem',
+    cursor: 'pointer',
+  }),
+  menu: (base) => ({
+    ...base,
+    background: 'rgba(15, 23, 42, 0.98)',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: 6,
+    zIndex: 50,
+  }),
+  option: (base, state) => ({
+    ...base,
+    fontSize: '0.85rem',
+    background: state.isFocused ? 'rgba(251,191,36,0.15)' : 'transparent',
+    color: state.isFocused ? '#fbbf24' : '#e2e8f0',
+    cursor: 'pointer',
+  }),
+  multiValue: (base) => ({ ...base, background: 'rgba(251,191,36,0.18)', borderRadius: 4 }),
+  multiValueLabel: (base) => ({ ...base, color: '#fbbf24', fontSize: '0.8rem' }),
+  input: (base) => ({ ...base, color: '#e2e8f0', fontSize: '0.85rem' }),
+  placeholder: (base) => ({ ...base, color: '#64748b' }),
+};
 
 function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
   const { open, ready } = usePlaidLink({ token: linkToken, onSuccess });
@@ -22,7 +54,7 @@ function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
 }
 
 /**
- * Normalize API transaction to { date, description, amount, category }
+ * Normalize API transaction to { id, date, description, amount, category, needs_review }
  */
 function normalizeTransaction(tx, index) {
   if (!tx) return null;
@@ -32,7 +64,9 @@ function normalizeTransaction(tx, index) {
   const category = Array.isArray(tx.category)
     ? tx.category?.join(', ') ?? tx.personal_finance_category?.primary ?? ''
     : tx.category ?? tx.personal_finance_category?.primary ?? '';
-  return { id: tx.transaction_id ?? tx.id ?? index, date, description, amount, category };
+  const needs_review = tx.needs_review === true;
+  const tags = Array.isArray(tx.tags) ? tx.tags : [];
+  return { id: tx.id ?? tx.transaction_id ?? index, date, description, amount, category, needs_review, tags };
 }
 
 function uploadErrorMessage(err) {
@@ -52,7 +86,7 @@ function uploadErrorMessage(err) {
 export default function DataEditorTab() {
   const navigate = useNavigate();
   const { isAuthenticated, getAccessToken, user, loading: authLoading } = useAuth();
-  const { transactions: contextTx, setAnalysisData, clearAnalysis } = useAnalysis();
+  const { transactions: contextTx, setAnalysisData, clearAnalysis, analysis, accounts, source, accessToken, itemId, files } = useAnalysis();
   const { startUpload } = useUpload();
   const [statements, setStatements] = useState([]);
   const [accountsWithStatements, setAccountsWithStatements] = useState([]);
@@ -65,6 +99,26 @@ export default function DataEditorTab() {
   const [categorizeSuccess, setCategorizeSuccess] = useState(null);
   const [linkToken, setLinkToken] = useState(null);
   const [linkTokenError, setLinkTokenError] = useState(null);
+  const [showOnlyNeedsReview, setShowOnlyNeedsReview] = useState(false);
+  /** IDs of transactions that stay visible under "Needs Review" filter after being categorized (cleared on refresh/filter change/bulk update) */
+  const [stickyReviewedIds, setStickyReviewedIds] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [editingTransactionId, setEditingTransactionId] = useState(null);
+  const [pendingBulkAction, setPendingBulkAction] = useState(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [availableTags, setAvailableTags] = useState([]);
+  const [editingTagsTransactionId, setEditingTagsTransactionId] = useState(null);
+  const categorySelectRef = React.useRef(null);
+
+  // Column filter state
+  const [filterDescription, setFilterDescription] = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterAmountMin, setFilterAmountMin] = useState('');
+  const [filterAmountMax, setFilterAmountMax] = useState('');
+  const [filterCategories, setFilterCategories] = useState([]);
+  const [filterTags, setFilterTags] = useState([]);
+  const [activeFilterColumn, setActiveFilterColumn] = useState(null);
 
   const token = getAccessToken?.();
 
@@ -87,6 +141,23 @@ export default function DataEditorTab() {
   useEffect(() => {
     fetchLinkToken();
   }, [fetchLinkToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    axios.get(`${API_BASE}/api/categories`).then((res) => {
+      if (!cancelled && res.data?.categories) setCategories(res.data.categories);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    axios.get(`${API_BASE}/api/tags`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => { if (!cancelled && res.data?.tags) setAvailableTags(res.data.tags); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
 
   const onPlaidSuccess = useCallback(
     async (public_token) => {
@@ -136,6 +207,7 @@ export default function DataEditorTab() {
           accounts.map((acc) => ({ ...acc, statements: stmts.filter((s) => s.account_id === acc.id) }))
       );
       setAnalysisData(res.data);
+      setStickyReviewedIds([]);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to load data');
       setStatements([]);
@@ -267,6 +339,161 @@ export default function DataEditorTab() {
     }
   };
 
+  const applyCategory = useCallback(
+    async (transactionId, newCategory) => {
+      if (!token || !newCategory?.trim()) return;
+      const previous = {
+        transactions: contextTx,
+        analysis,
+        accounts,
+        source,
+        access_token: accessToken,
+        item_id: itemId,
+        files,
+      };
+      const updatedTransactions = contextTx.map((t) =>
+        t.id === transactionId ? { ...t, category: newCategory.trim(), needs_review: false } : t
+      );
+      setAnalysisData({ ...previous, transactions: updatedTransactions });
+      setEditingTransactionId(null);
+      setError(null);
+      if (showOnlyNeedsReview) {
+        setStickyReviewedIds((prev) => (prev.includes(transactionId) ? prev : [...prev, transactionId]));
+      }
+      try {
+        const res = await axios.patch(
+          `${API_BASE}/api/transactions/${transactionId}/category`,
+          { category: newCategory.trim() },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = res.data;
+        if (data?.has_similar_pending && data?.similar_count > 0) {
+          setPendingBulkAction({
+            transactionId,
+            count: data.similar_count,
+            description: data.similar_description ?? '',
+            ...(data.similar_amount != null && { similar_amount: data.similar_amount }),
+          });
+        } else {
+          setPendingBulkAction((prev) => prev?.transactionId === transactionId ? null : prev);
+        }
+      } catch (err) {
+        setAnalysisData(previous);
+        setError(err.response?.data?.detail || err.message || 'Failed to update category');
+      }
+    },
+    [token, contextTx, analysis, accounts, source, accessToken, itemId, files, setAnalysisData, showOnlyNeedsReview]
+  );
+
+  const handleCategoryKeyDown = useCallback(
+    (e, transactionId) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const value = categorySelectRef.current?.value;
+        if (value) applyCategory(transactionId, value);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setEditingTransactionId(null);
+      }
+    },
+    [applyCategory]
+  );
+
+  const applyTags = useCallback(
+    async (transactionId, newTags) => {
+      if (!token) return;
+      const previous = {
+        transactions: contextTx,
+        analysis,
+        accounts,
+        source,
+        access_token: accessToken,
+        item_id: itemId,
+        files,
+      };
+      const updatedTransactions = contextTx.map((t) =>
+        t.id === transactionId ? { ...t, tags: newTags } : t
+      );
+      setAnalysisData({ ...previous, transactions: updatedTransactions });
+      setError(null);
+      try {
+        const res = await axios.patch(
+          `${API_BASE}/api/transactions/${transactionId}/tags`,
+          { tags: newTags },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = res.data;
+        if (data?.has_similar_pending && data?.similar_count > 0) {
+          if (!pendingBulkAction || pendingBulkAction.transactionId !== transactionId) {
+            setPendingBulkAction({
+              transactionId,
+              count: data.similar_count,
+              description: data.similar_description ?? '',
+              ...(data.similar_amount != null && { similar_amount: data.similar_amount }),
+            });
+          }
+        }
+      } catch (err) {
+        setAnalysisData(previous);
+        setError(err.response?.data?.detail || err.message || 'Failed to update tags');
+      }
+    },
+    [token, contextTx, analysis, accounts, source, accessToken, itemId, files, setAnalysisData, pendingBulkAction]
+  );
+
+  const handleTagCreate = useCallback((tag) => {
+    setAvailableTags((prev) => (prev.includes(tag) ? prev : [...prev, tag].sort()));
+  }, []);
+
+  const handleBulkUpdateYes = useCallback(async () => {
+    if (!token || !pendingBulkAction) return;
+    const txRow = contextTx.find((t) => t.id === pendingBulkAction.transactionId);
+    if (!txRow) return;
+    const bulkPayload = { description: pendingBulkAction.description };
+    if (txRow.category) bulkPayload.category = txRow.category;
+    if (txRow.tags?.length > 0) bulkPayload.tags = txRow.tags;
+    if (pendingBulkAction.similar_amount != null) bulkPayload.amount = pendingBulkAction.similar_amount;
+    if (!bulkPayload.category && !bulkPayload.tags) {
+      setPendingBulkAction(null);
+      return;
+    }
+    setBulkUpdating(true);
+    setError(null);
+    try {
+      const res = await axios.patch(
+        `${API_BASE}/api/transactions/bulk-update-category`,
+        bulkPayload,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const txList = res.data?.transactions;
+      if (Array.isArray(txList) && txList.length > 0) {
+        setAnalysisData({
+          transactions: txList,
+          analysis,
+          accounts,
+          source,
+          access_token: accessToken,
+          item_id: itemId,
+          files,
+        });
+      } else if (Array.isArray(txList)) {
+        // 0 rows updated: API returned full list as []; keep current transactions so UI does not go blank
+      } else {
+        await fetchUserData({ background: true });
+      }
+      setPendingBulkAction(null);
+      setStickyReviewedIds([]);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Bulk update failed');
+    } finally {
+      setBulkUpdating(false);
+    }
+  }, [token, pendingBulkAction, contextTx, setAnalysisData, analysis, accounts, source, accessToken, itemId, files, fetchUserData]);
+
+  const handleBulkUpdateNo = useCallback(() => {
+    setPendingBulkAction(null);
+  }, []);
+
   const formatCurrency = (value) =>
     new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 2 }).format(value);
 
@@ -276,10 +503,109 @@ export default function DataEditorTab() {
     return isNaN(date.getTime()) ? d : date.toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
-  const displayTransactions =
+  const displayTransactionsRaw =
     contextTx?.length > 0
-      ? contextTx.map((t, i) => normalizeTransaction(t, i)).filter(Boolean)
+      ? contextTx
+          .map((t, i) => normalizeTransaction(t, i))
+          .filter(Boolean)
+          .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
       : [];
+  const afterNeedsReview = showOnlyNeedsReview
+    ? displayTransactionsRaw.filter(
+        (tx) => tx.needs_review === true || stickyReviewedIds.includes(tx.id)
+      )
+    : displayTransactionsRaw;
+
+  const displayTransactions = React.useMemo(() => {
+    let list = afterNeedsReview;
+    const descTrim = filterDescription.trim();
+    if (descTrim) {
+      const lower = descTrim.toLowerCase();
+      list = list.filter((tx) => String(tx.description || '').toLowerCase().includes(lower));
+    }
+    if (filterDateFrom || filterDateTo) {
+      const from = filterDateFrom ? new Date(filterDateFrom) : null;
+      const to = filterDateTo ? new Date(filterDateTo) : null;
+      list = list.filter((tx) => {
+        const d = tx.date ? new Date(tx.date) : null;
+        if (!d || isNaN(d.getTime())) return false;
+        if (from && d < from) return false;
+        if (to) {
+          const toEnd = new Date(to);
+          toEnd.setHours(23, 59, 59, 999);
+          if (d > toEnd) return false;
+        }
+        return true;
+      });
+    }
+    const minNum = filterAmountMin !== '' ? parseFloat(filterAmountMin, 10) : null;
+    const maxNum = filterAmountMax !== '' ? parseFloat(filterAmountMax, 10) : null;
+    if (minNum != null && !Number.isNaN(minNum)) {
+      list = list.filter((tx) => Number(tx.amount) >= minNum);
+    }
+    if (maxNum != null && !Number.isNaN(maxNum)) {
+      list = list.filter((tx) => Number(tx.amount) <= maxNum);
+    }
+    if (filterCategories.length > 0) {
+      const set = new Set(filterCategories);
+      list = list.filter((tx) => set.has((tx.category || '').trim()));
+    }
+    if (filterTags.length > 0) {
+      const set = new Set(filterTags);
+      list = list.filter((tx) => Array.isArray(tx.tags) && tx.tags.some((t) => set.has(t)));
+    }
+    return list;
+  }, [
+    afterNeedsReview,
+    filterDescription,
+    filterDateFrom,
+    filterDateTo,
+    filterAmountMin,
+    filterAmountMax,
+    filterCategories,
+    filterTags,
+  ]);
+
+  const hasActiveFilters =
+    activeFilterColumn != null ||
+    filterDescription.trim() !== '' ||
+    filterDateFrom !== '' ||
+    filterDateTo !== '' ||
+    filterAmountMin !== '' ||
+    filterAmountMax !== '' ||
+    filterCategories.length > 0 ||
+    filterTags.length > 0;
+
+  const isDescriptionFilterActive = filterDescription.trim() !== '';
+  const isDateFilterActive = filterDateFrom !== '' || filterDateTo !== '';
+  const isAmountFilterActive = filterAmountMin !== '' || filterAmountMax !== '';
+  const isCategoryFilterActive = filterCategories.length > 0;
+  const isTagsFilterActive = filterTags.length > 0;
+
+  const clearFilters = useCallback(() => {
+    setFilterDescription('');
+    setFilterDateFrom('');
+    setFilterDateTo('');
+    setFilterAmountMin('');
+    setFilterAmountMax('');
+    setFilterCategories([]);
+    setFilterTags([]);
+    setActiveFilterColumn(null);
+  }, []);
+
+  useEffect(() => {
+    if (activeFilterColumn == null) return;
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setActiveFilterColumn(null);
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeFilterColumn]);
 
   return (
     <div className="data-editor-tab">
@@ -407,7 +733,26 @@ export default function DataEditorTab() {
 
       {/* Transactions Table */}
       <section className="data-editor-transactions">
-        <h2 className="data-editor-section-title">Recent Transactions</h2>
+        <div className="data-editor-transactions-header">
+          <h2 className="data-editor-section-title">Recent Transactions</h2>
+          <label className="data-editor-toggle-needs-review">
+            <input
+              type="checkbox"
+              checked={showOnlyNeedsReview}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setShowOnlyNeedsReview(checked);
+                if (!checked) setStickyReviewedIds([]);
+              }}
+            />
+            <span>Show only Needs Review</span>
+          </label>
+          {hasActiveFilters && (
+            <button type="button" onClick={clearFilters} className="data-editor-clear-filters-btn" aria-label="Clear all filters">
+              Clear Filters
+            </button>
+          )}
+        </div>
         {loading ? (
           <div className="glass-card data-editor-loading">Loading your data...</div>
         ) : (
@@ -416,30 +761,293 @@ export default function DataEditorTab() {
               <table className="data-editor-table">
                 <thead>
                   <tr>
-                    <th>Date</th>
-                    <th>Description</th>
-                    <th className="text-right">Amount</th>
-                    <th>Category</th>
+                    <th className={isDateFilterActive ? 'data-editor-th-filter-active' : ''}>
+                      <button
+                        type="button"
+                        className="data-editor-th-filter-btn"
+                        onClick={() => setActiveFilterColumn((c) => (c === 'date' ? null : 'date'))}
+                        aria-expanded={activeFilterColumn === 'date'}
+                        aria-label="Filter by date"
+                      >
+                        Date
+                        {isDateFilterActive && <Filter size={14} className="data-editor-th-filter-icon" aria-hidden />}
+                      </button>
+                    </th>
+                    <th className={isDescriptionFilterActive ? 'data-editor-th-filter-active' : ''}>
+                      <button
+                        type="button"
+                        className="data-editor-th-filter-btn"
+                        onClick={() => setActiveFilterColumn((c) => (c === 'description' ? null : 'description'))}
+                        aria-expanded={activeFilterColumn === 'description'}
+                        aria-label="Filter by description"
+                      >
+                        Description
+                        {isDescriptionFilterActive && <Filter size={14} className="data-editor-th-filter-icon" aria-hidden />}
+                      </button>
+                    </th>
+                    <th className={`text-right ${isAmountFilterActive ? 'data-editor-th-filter-active' : ''}`}>
+                      <button
+                        type="button"
+                        className="data-editor-th-filter-btn data-editor-th-filter-btn-right"
+                        onClick={() => setActiveFilterColumn((c) => (c === 'amount' ? null : 'amount'))}
+                        aria-expanded={activeFilterColumn === 'amount'}
+                        aria-label="Filter by amount"
+                      >
+                        Amount
+                        {isAmountFilterActive && <Filter size={14} className="data-editor-th-filter-icon" aria-hidden />}
+                      </button>
+                    </th>
+                    <th className={isCategoryFilterActive ? 'data-editor-th-filter-active' : ''}>
+                      <button
+                        type="button"
+                        className="data-editor-th-filter-btn"
+                        onClick={() => setActiveFilterColumn((c) => (c === 'category' ? null : 'category'))}
+                        aria-expanded={activeFilterColumn === 'category'}
+                        aria-label="Filter by category"
+                      >
+                        Category
+                        {isCategoryFilterActive && <Filter size={14} className="data-editor-th-filter-icon" aria-hidden />}
+                      </button>
+                    </th>
+                    <th className={isTagsFilterActive ? 'data-editor-th-filter-active' : ''}>
+                      <button
+                        type="button"
+                        className="data-editor-th-filter-btn"
+                        onClick={() => setActiveFilterColumn((c) => (c === 'tags' ? null : 'tags'))}
+                        aria-expanded={activeFilterColumn === 'tags'}
+                        aria-label="Filter by tags"
+                      >
+                        Tags
+                        {isTagsFilterActive && <Filter size={14} className="data-editor-th-filter-icon" aria-hidden />}
+                      </button>
+                    </th>
+                    <th className="data-editor-actions-col">Actions</th>
+                  </tr>
+                  <tr className="data-editor-filter-row">
+                    <td className={activeFilterColumn === 'date' ? 'data-editor-filter-cell-active' : ''}>
+                      {activeFilterColumn === 'date' && (
+                        <div className="data-editor-filter-inputs">
+                          <input
+                            type="date"
+                            className="data-editor-filter-date"
+                            value={filterDateFrom}
+                            onChange={(e) => setFilterDateFrom(e.target.value)}
+                            aria-label="Date from"
+                          />
+                          <span className="data-editor-filter-sep">–</span>
+                          <input
+                            type="date"
+                            className="data-editor-filter-date"
+                            value={filterDateTo}
+                            onChange={(e) => setFilterDateTo(e.target.value)}
+                            aria-label="Date to"
+                          />
+                          <button type="button" className="data-editor-filter-clear-col" onClick={() => { setFilterDateFrom(''); setFilterDateTo(''); }} aria-label="Clear date filter">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td className={activeFilterColumn === 'description' ? 'data-editor-filter-cell-active' : ''}>
+                      {activeFilterColumn === 'description' && (
+                        <div className="data-editor-filter-inputs">
+                          <input
+                            type="text"
+                            className="data-editor-filter-text"
+                            value={filterDescription}
+                            onChange={(e) => setFilterDescription(e.target.value)}
+                            placeholder="Filter by description…"
+                            aria-label="Filter by description"
+                            autoFocus
+                          />
+                          <button type="button" className="data-editor-filter-clear-col" onClick={() => setFilterDescription('')} aria-label="Clear description filter">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td className={`text-right ${activeFilterColumn === 'amount' ? 'data-editor-filter-cell-active' : ''}`}>
+                      {activeFilterColumn === 'amount' && (
+                        <div className="data-editor-filter-inputs data-editor-filter-inputs-right">
+                          <input
+                            type="number"
+                            className="data-editor-filter-number"
+                            placeholder="Min"
+                            value={filterAmountMin}
+                            onChange={(e) => setFilterAmountMin(e.target.value)}
+                            aria-label="Minimum amount"
+                          />
+                          <span className="data-editor-filter-sep">–</span>
+                          <input
+                            type="number"
+                            className="data-editor-filter-number"
+                            placeholder="Max"
+                            value={filterAmountMax}
+                            onChange={(e) => setFilterAmountMax(e.target.value)}
+                            aria-label="Maximum amount"
+                          />
+                          <button type="button" className="data-editor-filter-clear-col" onClick={() => { setFilterAmountMin(''); setFilterAmountMax(''); }} aria-label="Clear amount filter">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td className={activeFilterColumn === 'category' ? 'data-editor-filter-cell-active' : ''}>
+                      {activeFilterColumn === 'category' && (
+                        <div className="data-editor-filter-inputs">
+                          <Select
+                            isMulti
+                            placeholder="Select categories…"
+                            value={filterCategories.map((c) => ({ value: c, label: c }))}
+                            options={categories.map((c) => ({ value: c.name, label: c.name }))}
+                            onChange={(selected) => setFilterCategories((selected || []).map((o) => o.value))}
+                            styles={filterSelectStyles}
+                            classNamePrefix="data-editor-filter-select"
+                            menuPortalTarget={document.body}
+                          />
+                          <button type="button" className="data-editor-filter-clear-col" onClick={() => setFilterCategories([])} aria-label="Clear category filter">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td className={activeFilterColumn === 'tags' ? 'data-editor-filter-cell-active' : ''}>
+                      {activeFilterColumn === 'tags' && (
+                        <div className="data-editor-filter-inputs">
+                          <Select
+                            isMulti
+                            placeholder="Select tags…"
+                            value={filterTags.map((t) => ({ value: t, label: t }))}
+                            options={availableTags.map((t) => ({ value: t, label: t }))}
+                            onChange={(selected) => setFilterTags((selected || []).map((o) => o.value))}
+                            styles={filterSelectStyles}
+                            classNamePrefix="data-editor-filter-select"
+                            menuPortalTarget={document.body}
+                          />
+                          <button type="button" className="data-editor-filter-clear-col" onClick={() => setFilterTags([])} aria-label="Clear tags filter">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                    <td className="data-editor-filter-row-actions" />
                   </tr>
                 </thead>
                 <tbody>
                   {displayTransactions.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="data-editor-table-empty">
+                      <td colSpan={6} className="data-editor-table-empty">
                         No transactions yet. Connect your bank or upload statements to see them here.
                       </td>
                     </tr>
                   ) : (
-                    displayTransactions.map((tx) => (
-                      <tr key={tx.id}>
+                    displayTransactions.map((tx) => {
+                      const isProcessedSticky =
+                        showOnlyNeedsReview && !tx.needs_review && stickyReviewedIds.includes(tx.id);
+                      return (
+                      <React.Fragment key={tx.id}>
+                        <tr
+                          className={[
+                            tx.needs_review ? 'data-editor-row-needs-review' : '',
+                            isProcessedSticky ? 'data-editor-row-processed' : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        >
                         <td>{formatDate(tx.date)}</td>
                         <td>{tx.description}</td>
                         <td className={`text-right ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}`}>
                           {formatCurrency(tx.amount)}
                         </td>
-                        <td>{tx.category}</td>
+                        <td
+                          className={editingTransactionId === tx.id ? 'data-editor-cell-edit' : ''}
+                          onClick={() => editingTransactionId !== tx.id && setEditingTransactionId(tx.id)}
+                        >
+                          {editingTransactionId === tx.id ? (
+                            <select
+                              ref={categorySelectRef}
+                              className="data-editor-category-select"
+                              value={tx.category || ''}
+                              onChange={(e) => applyCategory(tx.id, e.target.value)}
+                              onKeyDown={(e) => handleCategoryKeyDown(e, tx.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              autoFocus
+                            >
+                              <option value="">—</option>
+                              {categories.map((c) => (
+                                <option key={c.id || c.name} value={c.name}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <>
+                              {tx.needs_review && <span className="data-editor-needs-review-dot" aria-hidden />}
+                              {tx.category || '—'}
+                            </>
+                          )}
+                        </td>
+                        <td
+                          className={editingTagsTransactionId === tx.id ? 'data-editor-cell-edit data-editor-tags-cell-edit' : 'data-editor-tags-cell'}
+                          onClick={() => editingTagsTransactionId !== tx.id && setEditingTagsTransactionId(tx.id)}
+                        >
+                          {editingTagsTransactionId === tx.id ? (
+                            <TransactionTagInput
+                              value={tx.tags}
+                              options={availableTags}
+                              onChange={(tags) => applyTags(tx.id, tags)}
+                              onCreateOption={handleTagCreate}
+                              autoFocus
+                            />
+                          ) : tx.tags.length > 0 ? (
+                            <div className="data-editor-tag-chips">
+                              {tx.tags.map((tag) => (
+                                <span key={tag} className="data-editor-tag-chip">{tag}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="data-editor-tags-empty">—</span>
+                          )}
+                        </td>
+                        <td className="data-editor-actions-cell">
+                          {pendingBulkAction && pendingBulkAction.transactionId === tx.id && (
+                            <div className="data-editor-bulk-inline">
+                              <span
+                                className="data-editor-bulk-inline-icon"
+                                style={{ pointerEvents: bulkUpdating ? 'none' : undefined }}
+                                title={
+                                  (() => {
+                                    const parts = [];
+                                    if (tx.category) parts.push(tx.category);
+                                    if (tx.tags?.length) parts.push(tx.tags.map((t) => (t.startsWith('#') ? t : `#${t}`)).join(' '));
+                                    const applyTo = parts.length ? `Apply ${parts.join(' and ')} to ` : 'Apply to ';
+                                    return `${applyTo}${pendingBulkAction.count} similar transaction${pendingBulkAction.count !== 1 ? 's' : ''}`;
+                                  })()
+                                }
+                                onClick={handleBulkUpdateYes}
+                                onKeyDown={(e) => e.key === 'Enter' && handleBulkUpdateYes()}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Apply to ${pendingBulkAction.count} similar transactions`}
+                              >
+                                <Sparkles size={18} />
+                              </span>
+                              <button
+                                type="button"
+                                className="data-editor-bulk-inline-dismiss"
+                                onClick={(e) => { e.stopPropagation(); handleBulkUpdateNo(); }}
+                                disabled={bulkUpdating}
+                                aria-label="Dismiss bulk action"
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
                       </tr>
-                    ))
+                      </React.Fragment>
+                    );
+                    })
                   )}
                 </tbody>
               </table>

@@ -96,10 +96,23 @@ class TransactionItem(BaseModel):
     )
 
 
+class HoldingItem(BaseModel):
+    """Single holding position from an investment statement."""
+
+    asset_symbol: str | None = Field(default="CASH", description="Ticker symbol (e.g. XEQT, VFV) or 'CASH' for cash balances")
+    asset_name: str | None = Field(default=None, description="Full name of the asset (e.g. 'iShares Core Equity ETF')")
+    quantity: float = Field(description="Number of units/shares held")
+    unit_price: float = Field(description="Price per unit in the account currency")
+    total_value: float = Field(description="Total market value (quantity * unit_price)")
+    currency: str = Field(default="CAD", description="Currency code (e.g. CAD, USD)")
+    is_cash_equivalent: bool = Field(default=False, description="True if this position is cash or a money-market/savings equivalent")
+
+
 class StatementExtraction(StatementFields):
-    """Combined LLM output: statement metadata (from StatementFields) + list of transactions."""
+    """Combined LLM output: statement metadata + transactions + holdings."""
 
     transactions: list[TransactionItem] = Field(default_factory=list, description="List of all transactions in the statement")
+    holdings: list[HoldingItem] = Field(default_factory=list, description="Itemized holding positions for investment/brokerage accounts; empty for depository/credit/loan accounts")
 
 
 try:
@@ -126,7 +139,7 @@ def _allowed_account_types_prompt_suffix() -> str:
 def _allowed_category_names_prompt_suffix() -> str:
     """Allowed category names for LLM prompt (from categories.json). Does not include 'Uncategorized' (allowed separately in prompt)."""
     if get_category_names is None:
-        return "Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Financial & Investing, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Miscellaneous, Self-Transfer, Transport & Auto, Utilities & Phone"
+        return "Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Financial & Investing, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
     return ", ".join(get_category_names())
 
 
@@ -145,18 +158,34 @@ Extract the following:
    - end_date: Last day of the statement period in YYYY-MM-DD format.
    - account_type: You MUST use exactly one of these values (pick the closest match to what the document says): {_allowed_account_types_prompt_suffix()}. Do not use any other wording (e.g. use "TFSA" not "Tax-Free Savings", use "RRSP" not "Registered Retirement Savings Plan").
 
-2) Every transaction in the statement as a list. For each transaction provide: date (YYYY-MM-DD), description (text), amount (signed number: negative for withdrawals/outflows, positive for deposits/inflows), category, confidence_score (0-1).
+2) Every transaction in the statement as a list. These are transaction line items from a bank or brokerage statement (not from a live feed with clean merchant names). Descriptions may be abbreviated, include reference numbers, ATM/terminal IDs, or payee names, and format varies by institution—use this context when assigning categories.
+   For each transaction provide: date (YYYY-MM-DD), description (text), amount (signed number: negative for withdrawals/outflows, positive for deposits/inflows), category, confidence_score (0-1).
    - category: You MUST use exactly one of these values: {_allowed_category_names_prompt_suffix()}, or "Uncategorized". Use "Uncategorized" ONLY when your confidence in the category assignment is less than 0.8; otherwise pick the best-matching category from the list and set confidence_score at least 0.8.
    - confidence_score: Your confidence in the category assignment, a number from 0 to 1.
    If there are no transactions, return an empty list.
 
+3) For investment/brokerage accounts (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC), extract every holding position as a list. For each holding provide:
+   - asset_symbol: Ticker symbol (e.g. XEQT, VFV, BTC). Use "CASH" for cash balances.
+   - asset_name: Full name of the asset (e.g. "iShares Core Equity ETF Portfolio").
+   - quantity: Number of units/shares held.
+   - unit_price: Price per unit in the account currency.
+   - total_value: Total market value of this position (quantity * unit_price).
+   - currency: Currency code (e.g. CAD, USD).
+   - is_cash_equivalent: true if this position is cash or a money-market/savings equivalent, false otherwise.
+   Cash balances within an investment account should be included as a holding with asset_symbol "CASH" and is_cash_equivalent true.
+   For non-investment accounts (Chequing, Savings, Credit Card, Line of Credit, HELOC, Mortgage, AutoLoan, Student Loan), return an empty holdings list.
+
 Use null for any metadata value you cannot find."""
 
 
-def extract_statement_with_llm(markdown: str, *, api_key: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def extract_statement_with_llm(
+    markdown: str, *, api_key: str | None = None
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """
-    Single Gemini call: return (metadata_dict, transactions_list). Uses account_id throughout.
-    Uses GOOGLE_API_KEY or GEMINI_API_KEY from env if api_key not provided.
+    Single Gemini call with structured output enforcement via instructor response_model.
+    Returns (metadata_dict, transactions_list, holdings_list).
+    The full Pydantic schema (StatementExtraction including HoldingItem) is passed
+    as the response_schema to Gemini, guaranteeing the returned JSON matches our DB types.
     """
     import instructor
 
@@ -168,8 +197,12 @@ def extract_statement_with_llm(markdown: str, *, api_key: str | None = None) -> 
         response_model=StatementExtraction,
     )
     meta = out.model_dump()
+    # Normalize account_id: remove spaces so "1 3008701" -> "13008701" (same account across statements)
+    if meta.get("account_id") and isinstance(meta["account_id"], str):
+        meta["account_id"] = "".join(meta["account_id"].split()).replace("-", "") or meta["account_id"]
     txns_list = meta.pop("transactions", [])
-    return (meta, txns_list)
+    holdings_list = meta.pop("holdings", [])
+    return (meta, txns_list, holdings_list)
 
 
 def _extract_statement_fields_regex(markdown: str) -> dict[str, Any]:
@@ -179,9 +212,12 @@ def _extract_statement_fields_regex(markdown: str) -> dict[str, Any]:
         text = text[:MAX_TEXT_FOR_EXTRACTION]
     get_meta = _get_metadata_extractor()
     meta = get_meta(text.lower(), bank_id="generic")
+    # Normalize account number: no spaces so statements match the same account
+    raw_account = meta.get("account_number")
+    account_id = "".join((raw_account or "").split()).replace("-", "") or raw_account if raw_account else None
     return {
         "provider": meta.get("bank_name") or "Unknown",
-        "account_id": meta.get("account_number"),
+        "account_id": account_id,
         "opening_balance": meta.get("opening_balance"),
         "closing_balance": meta.get("total_account_value"),
         "currency": meta.get("currency", "CAD"),
@@ -189,6 +225,7 @@ def _extract_statement_fields_regex(markdown: str) -> dict[str, Any]:
         "end_date": meta.get("end_date"),
         "account_type": meta.get("account_type") or "Chequing",
         "transactions": [],
+        "holdings": [],
     }
 
 
@@ -211,8 +248,8 @@ def extract_statement_fields(pdf_path: Path, *, use_llm: bool | None = None) -> 
     )
     if use_llm_extraction:
         try:
-            meta, txns_list = extract_statement_with_llm(full_markdown)
-            result_dict = {**meta, "transactions": txns_list}
+            meta, txns_list, holdings_list = extract_statement_with_llm(full_markdown)
+            result_dict = {**meta, "transactions": txns_list, "holdings": holdings_list}
             return (result_dict, full_markdown)
         except Exception as e:
             print(f"LLM extraction failed ({e}), falling back to regex.", file=sys.stderr)

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { Wallet, TrendingUp, PiggyBank, Target, Clock, CreditCard } from 'lucide-react';
+import { Wallet, TrendingUp, PiggyBank, Target, Clock, CreditCard, ChevronRight } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../lib/supabase';
 import './WealthTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -59,20 +58,30 @@ function groupAccounts(accounts) {
     Liability: 'liabilities',
   };
   for (const a of accounts || []) {
-    const wealthType = WEALTH_TYPE_BY_ACCOUNT[a.account_type];
-    const groupKey = wealthType ? keyByWealthType[wealthType] : null;
+    const subtype = a.account_subtype || a.account_type;
+    const wealthType = WEALTH_TYPE_BY_ACCOUNT[subtype] || 'Liquid Asset'; // fallback so accounts with balances still show
+    const groupKey = keyByWealthType[wealthType];
     if (!groupKey) continue;
-    const balance = Number(a.last_balance ?? 0);
-    const displayName = a.name?.trim() || [a.provider, a.account_type].filter(Boolean).join(' ') || 'Account';
+    const displayName = a.name?.trim() || [a.provider, subtype].filter(Boolean).join(' ') || 'Account';
     const isLiability = wealthType === 'Liability';
-    const displayBalance = isLiability && balance > 0 ? -balance : balance;
-    groups[groupKey].push({
-      id: a.id,
-      provider: displayName,
-      type: a.account_type,
-      balance: displayBalance,
-      isLiability,
-    });
+    const balances = Array.isArray(a.balances) && a.balances.length > 0
+      ? a.balances
+      : [{ amount: 0, currency: 'CAD', date: null }];
+    for (const b of balances) {
+      const balance = Number(b.amount ?? 0);
+      const displayBalance = isLiability && balance > 0 ? -balance : balance;
+      groups[groupKey].push({
+        id: `${a.id}-${b.currency}`,
+        accountId: a.id,
+        provider: displayName,
+        type: subtype,
+        balance: displayBalance,
+        currency: b.currency || 'CAD',
+        date: b.date ?? null,
+        isLiability,
+        accountType: a.account_type,
+      });
+    }
   }
   return groups;
 }
@@ -82,37 +91,29 @@ export default function WealthTab() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [expandedItemId, setExpandedItemId] = useState(null);
+  const [holdingsByKey, setHoldingsByKey] = useState({});
 
   const fetchAccounts = useCallback(async () => {
-    if (!user?.id || !supabase) {
+    if (!user?.id) {
       setLoading(false);
+      return;
+    }
+    if (!API_BASE || !getAccessToken) {
+      setLoading(false);
+      setAccounts([]);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      // Refresh balances from statements/transactions so Cash etc. show correct totals
-      if (API_BASE && getAccessToken) {
-        try {
-          await axios.post(
-            `${API_BASE}/api/refresh_account_balances`,
-            {},
-            { headers: { Authorization: `Bearer ${getAccessToken()}` } }
-          );
-        } catch (_) {
-          // ignore; will show whatever last_balance is in DB
-        }
-      }
-      const { data, error: fetchError } = await supabase
-        .from('accounts')
-        .select('id, name, account_type, provider, last_balance')
-        .eq('user_id', user.id)
-        .order('account_type');
-      if (fetchError) throw fetchError;
-      setAccounts(data || []);
+      const res = await axios.get(`${API_BASE}/api/accounts_with_balances`, {
+        headers: { Authorization: `Bearer ${getAccessToken()}` },
+      });
+      setAccounts(res.data?.accounts ?? []);
     } catch (e) {
       console.error('Wealth tab fetch error:', e);
-      setError(e.message || 'Failed to load accounts.');
+      setError(e.response?.data?.detail || e.message || 'Failed to load accounts.');
       setAccounts([]);
     } finally {
       setLoading(false);
@@ -123,8 +124,52 @@ export default function WealthTab() {
     fetchAccounts();
   }, [fetchAccounts]);
 
-  const formatCurrency = (value) =>
-    new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 0 }).format(value);
+  const fetchHoldings = useCallback(async (itemId, accountId, currency) => {
+    let alreadyExists = false;
+    setHoldingsByKey((prev) => {
+      if (prev[itemId] !== undefined) { alreadyExists = true; return prev; }
+      return { ...prev, [itemId]: { loading: true } };
+    });
+    if (alreadyExists) return;
+    try {
+      const res = await axios.get(`${API_BASE}/api/holdings`, {
+        params: { account_id: accountId, currency: currency || 'CAD' },
+        headers: { Authorization: `Bearer ${getAccessToken()}` },
+      });
+      setHoldingsByKey((prev) => ({
+        ...prev,
+        [itemId]: { date: res.data?.date ?? null, holdings: res.data?.holdings ?? [] },
+      }));
+    } catch (e) {
+      setHoldingsByKey((prev) => ({
+        ...prev,
+        [itemId]: { error: e.response?.data?.detail || e.message || 'Failed to load holdings.' },
+      }));
+    }
+  }, [getAccessToken]);
+
+  const toggleExpand = useCallback((item) => {
+    if (item.accountType !== 'investment') return;
+    const id = item.id;
+    const isExpanding = expandedItemId !== id;
+    setExpandedItemId((prev) => (prev === id ? null : id));
+    if (isExpanding && holdingsByKey[id] === undefined) {
+      fetchHoldings(id, item.accountId, item.currency);
+    }
+  }, [expandedItemId, holdingsByKey, fetchHoldings]);
+
+  const formatCurrency = (value, currency = 'CAD') =>
+    new Intl.NumberFormat('en-CA', { style: 'currency', currency, minimumFractionDigits: 0 }).format(value);
+
+  const formatBalanceDate = (dateStr) => {
+    if (!dateStr) return null;
+    try {
+      const d = new Date(dateStr);
+      return isNaN(d.getTime()) ? null : d.toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch {
+      return null;
+    }
+  };
 
   const groups = groupAccounts(accounts);
 
@@ -161,18 +206,84 @@ export default function WealthTab() {
               {items.length === 0 ? (
                 <div className="wealth-tab-empty">No accounts in this category</div>
               ) : (
-                items.map((item) => (
-                  <div key={item.id} className="wealth-tab-item">
-                    <span className="wealth-tab-provider">
-                      {item.type && <span className="wealth-tab-type">{item.type}</span>}
-                      {item.type && item.provider ? ' · ' : ''}
-                      {item.provider}
-                    </span>
-                    <span className={`wealth-tab-balance ${item.isLiability ? 'wealth-tab-balance-negative' : 'wealth-tab-balance-positive'}`}>
-                      {formatCurrency(item.balance)}
-                    </span>
-                  </div>
-                ))
+                items.map((item) => {
+                  const isInvestment = item.accountType === 'investment';
+                  const isExpanded = expandedItemId === item.id;
+                  const cached = holdingsByKey[item.id];
+                  return (
+                    <div
+                      key={item.id}
+                      className={`wealth-tab-item ${isInvestment ? 'wealth-tab-item-expandable' : ''} ${isExpanded ? 'wealth-tab-item-expanded' : ''}`}
+                      onClick={isInvestment ? () => toggleExpand(item) : undefined}
+                      role={isInvestment ? 'button' : undefined}
+                      aria-expanded={isInvestment ? isExpanded : undefined}
+                    >
+                      <div className="wealth-tab-item-main">
+                        <span className="wealth-tab-provider">
+                          {isInvestment && (
+                            <ChevronRight className="wealth-tab-expand-icon" strokeWidth={2} aria-hidden />
+                          )}
+                          {item.type && <span className="wealth-tab-type">{item.type}</span>}
+                          {item.type && item.provider ? ' · ' : ''}
+                          {item.provider}
+                        </span>
+                        <span className="wealth-tab-item-right">
+                          <span className={`wealth-tab-balance ${item.isLiability ? 'wealth-tab-balance-negative' : 'wealth-tab-balance-positive'}`}>
+                            {formatCurrency(item.balance, item.currency)}
+                          </span>
+                          {formatBalanceDate(item.date) && (
+                            <span className="wealth-tab-balance-date">
+                              Balance as of {formatBalanceDate(item.date)}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      {isInvestment && isExpanded && (
+                        <div className="wealth-tab-holdings">
+                          {(cached === undefined || cached?.loading) && (
+                            <div className="wealth-tab-holdings-loading">Loading holdings…</div>
+                          )}
+                          {cached?.error && (
+                            <div className="wealth-tab-holdings-error">{cached.error}</div>
+                          )}
+                          {cached?.holdings && !cached.loading && !cached.error && (
+                            <>
+                              {cached.date && (
+                                <div className="wealth-tab-holdings-date">
+                                  Holdings as of {formatBalanceDate(cached.date)}
+                                </div>
+                              )}
+                              {cached.holdings.length === 0 ? (
+                                <div className="wealth-tab-holdings-empty">No holdings for this account/currency.</div>
+                              ) : (
+                                <div className="wealth-tab-holdings-list">
+                                  {cached.holdings.map((h, idx) => (
+                                    <div key={idx} className="wealth-tab-holding-row">
+                                      <span className="wealth-tab-holding-symbol">
+                                        {h.asset_symbol || '—'}
+                                        {h.asset_name ? ` · ${h.asset_name}` : ''}
+                                      </span>
+                                      <span className="wealth-tab-holding-detail">
+                                        {h.quantity != null && h.unit_price != null && (
+                                          <span className="wealth-tab-holding-qty">
+                                            {Number(h.quantity).toLocaleString('en-CA', { minimumFractionDigits: 0, maximumFractionDigits: 6 })} × {formatCurrency(h.unit_price, h.currency)}
+                                          </span>
+                                        )}
+                                        <span className={`wealth-tab-holding-value ${item.isLiability ? 'wealth-tab-balance-negative' : 'wealth-tab-balance-positive'}`}>
+                                          {formatCurrency(h.total_value ?? 0, h.currency || item.currency)}
+                                        </span>
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </section>

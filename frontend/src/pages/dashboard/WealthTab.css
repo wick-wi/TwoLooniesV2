@@ -56,9 +56,8 @@
 
 .wealth-tab-item {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.25rem;
+  flex-direction: column;
+  padding: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -66,7 +65,33 @@
   border-bottom: none;
 }
 
+.wealth-tab-item-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+}
+
+.wealth-tab-item-expandable {
+  cursor: pointer;
+}
+
+.wealth-tab-item-expandable .wealth-tab-expand-icon {
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.35rem;
+  color: #94a3b8;
+  transition: transform 0.2s ease;
+}
+
+.wealth-tab-item-expanded .wealth-tab-expand-icon {
+  transform: rotate(90deg);
+}
+
 .wealth-tab-provider {
+  display: flex;
+  align-items: center;
   font-weight: 500;
   color: #e2e8f0;
 }
@@ -76,9 +101,22 @@
   font-weight: 600;
 }
 
+.wealth-tab-item-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+}
+
 .wealth-tab-balance {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.wealth-tab-balance-date {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 400;
 }
 
 .wealth-tab-balance-positive {
@@ -87,4 +125,63 @@
 
 .wealth-tab-balance-negative {
   color: #f87171;
+}
+
+.wealth-tab-holdings {
+  padding: 0.75rem 1.25rem 1rem 2.5rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.wealth-tab-holdings-loading,
+.wealth-tab-holdings-error,
+.wealth-tab-holdings-empty {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.wealth-tab-holdings-error {
+  color: #f87171;
+}
+
+.wealth-tab-holdings-date {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 0.5rem;
+}
+
+.wealth-tab-holdings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.wealth-tab-holding-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.9rem;
+}
+
+.wealth-tab-holding-symbol {
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.wealth-tab-holding-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+}
+
+.wealth-tab-holding-qty {
+  font-size: 0.75rem;
+  color: #64748b;
+  font-weight: 400;
+}
+
+.wealth-tab-holding-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }

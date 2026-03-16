@@ -28,6 +28,12 @@ def _infer_category(description: str) -> str:
     return "Other"
 
 
+# Categories that are excluded from income/expense (like internal transfers)
+EXCLUDE_FROM_CASHFLOW_CATEGORIES = frozenset(
+    {"Self-Transfer", "Credit Card Payment", "Loans & Reimbursements"}
+)
+
+
 # Refund indicators: positive amounts with these in description reduce expenses
 REFUND_KEYWORDS = ("refund", "credit adjustment", "reversal", "credit", "reversed", "refunded")
 
@@ -77,8 +83,9 @@ def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
         cat = t.get("category") or _infer_category(desc)
         date_str = t.get("date")
         is_transfer = t.get("is_transfer") is True
+        exclude_category = (cat or "").strip() in EXCLUDE_FROM_CASHFLOW_CATEGORIES
 
-        if is_transfer:
+        if is_transfer or exclude_category:
             continue
         if amount > 0:
             if _is_refund(t):

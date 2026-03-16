@@ -1,6 +1,8 @@
 """
 Shared account types reference loaded from api/data/account_types.json.
 Used by metadata and docling_statement for validation and keyword inference.
+JSON entries have: type (Plaid category), subtype (slug), name (canonical),
+generates_transactions, wealth_type.
 """
 import json
 from pathlib import Path
@@ -39,25 +41,37 @@ ACCOUNT_TYPE_KEYWORDS_ORDERED = [
 
 _cached_valid_names: frozenset[str] | None = None
 _cached_keyword_pairs: list[tuple[str, str]] | None = None
+_cached_types_list: list[dict] | None = None
+
+
+def _load_raw() -> list[dict]:
+    """Load and cache the raw account_types list from JSON."""
+    global _cached_types_list
+    if _cached_types_list is not None:
+        return _cached_types_list
+    try:
+        raw = _ACCOUNT_TYPES_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        _cached_types_list = data.get("account_types") or []
+    except (OSError, json.JSONDecodeError, KeyError):
+        _cached_types_list = []
+    return _cached_types_list
 
 
 def _load() -> tuple[frozenset[str], list[tuple[str, str]]]:
     global _cached_valid_names, _cached_keyword_pairs
     if _cached_valid_names is not None and _cached_keyword_pairs is not None:
         return _cached_valid_names, _cached_keyword_pairs
-    try:
-        raw = _ACCOUNT_TYPES_PATH.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        types_list = data.get("account_types") or []
+    types_list = _load_raw()
+    if types_list:
         valid_names = frozenset(t.get("name") for t in types_list if t.get("name"))
         keyword_pairs = [(kw, name) for kw, name in ACCOUNT_TYPE_KEYWORDS_ORDERED if name in valid_names]
         _cached_valid_names = valid_names
         _cached_keyword_pairs = keyword_pairs
         return valid_names, keyword_pairs
-    except (OSError, json.JSONDecodeError, KeyError):
-        fallback = frozenset({"Chequing", "Savings", "Credit Card", "TFSA", "RRSP", "FHSA", "Mortgage", "Loan"})
-        keyword_pairs = [(kw, name) for kw, name in ACCOUNT_TYPE_KEYWORDS_ORDERED if name in fallback]
-        return fallback, keyword_pairs
+    fallback = frozenset({"Chequing", "Savings", "Credit Card", "TFSA", "RRSP", "FHSA", "Mortgage", "Loan"})
+    keyword_pairs = [(kw, name) for kw, name in ACCOUNT_TYPE_KEYWORDS_ORDERED if name in fallback]
+    return fallback, keyword_pairs
 
 
 def get_valid_account_type_names() -> frozenset[str]:
@@ -74,30 +88,57 @@ def get_account_type_keywords() -> list[tuple[str, str]]:
 
 def get_account_type_names_tuple() -> tuple[str, ...]:
     """Return tuple of valid names for DB check / dropdowns (order from JSON)."""
-    try:
-        raw = _ACCOUNT_TYPES_PATH.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        types_list = data.get("account_types") or []
+    types_list = _load_raw()
+    if types_list:
         return tuple(t.get("name") for t in types_list if t.get("name"))
-    except (OSError, json.JSONDecodeError, KeyError):
-        return ("Chequing", "Savings", "TFSA", "RRSP", "FHSA", "Credit Card", "Mortgage", "Loan")
+    return ("Chequing", "Savings", "TFSA", "RRSP", "FHSA", "Credit Card", "Mortgage", "Loan")
 
 
 _cached_generates_map: dict[str, bool] | None = None
 
 
 def get_generates_transactions(account_type_name: str) -> bool:
-    """Return True if the account type (by canonical name) has generates_transactions true in account_types.json (PRD)."""
+    """Return True if the account type (by canonical name) has generates_transactions true."""
     global _cached_generates_map
     if _cached_generates_map is None:
-        try:
-            raw = _ACCOUNT_TYPES_PATH.read_text(encoding="utf-8")
-            data = json.loads(raw)
-            types_list = data.get("account_types") or []
-            _cached_generates_map = {
-                (t.get("name") or ""): bool(t.get("generates_transactions"))
-                for t in types_list if t.get("name")
-            }
-        except (OSError, json.JSONDecodeError, KeyError):
-            _cached_generates_map = {}
+        types_list = _load_raw()
+        _cached_generates_map = {
+            (t.get("name") or ""): bool(t.get("generates_transactions"))
+            for t in types_list if t.get("name")
+        }
     return _cached_generates_map.get(account_type_name, False)
+
+
+# --- New Plaid taxonomy lookups ---
+
+_cached_plaid_type_map: dict[str, str] | None = None
+_cached_subtype_id_map: dict[str, str] | None = None
+
+
+def _build_plaid_maps() -> None:
+    global _cached_plaid_type_map, _cached_subtype_id_map
+    if _cached_plaid_type_map is not None:
+        return
+    types_list = _load_raw()
+    _cached_plaid_type_map = {}
+    _cached_subtype_id_map = {}
+    for t in types_list:
+        name = t.get("name")
+        if not name:
+            continue
+        _cached_plaid_type_map[name] = t.get("type", "depository")
+        _cached_subtype_id_map[name] = t.get("subtype", "")
+
+
+def get_plaid_type(account_type_name: str) -> str | None:
+    """Map a canonical name (e.g. 'TFSA') to its Plaid top-level type (e.g. 'investment')."""
+    _build_plaid_maps()
+    assert _cached_plaid_type_map is not None
+    return _cached_plaid_type_map.get(account_type_name)
+
+
+def get_subtype_id(account_type_name: str) -> str | None:
+    """Map a canonical name (e.g. 'TFSA') to its subtype slug (e.g. 'tfsa')."""
+    _build_plaid_maps()
+    assert _cached_subtype_id_map is not None
+    return _cached_subtype_id_map.get(account_type_name)
