@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, Wallet } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAnalysis } from '../../context/AnalysisContext';
 import CashflowSankey from '../../components/CashflowSankey';
+import { formatMoney } from '../../utils/money';
 import './CashflowTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -136,6 +137,16 @@ export default function CashflowTab() {
     });
   }, [transactionsBySelectedAccounts, startDate, endDate]);
 
+  const displayCurrency = useMemo(() => {
+    const set = new Set();
+    for (const tx of filteredByDate) {
+      const cur = (tx?.currency || '').toString().trim();
+      if (cur) set.add(cur);
+      if (set.size > 1) break;
+    }
+    return set.size === 1 ? Array.from(set)[0] : null;
+  }, [filteredByDate]);
+
   const { income, expenses, savings, categoryBreakdowns, sankeyMode, savingsFlow, creditDeficitFlow } = useMemo(() => {
     const list = filteredByDate;
     let incomeSum = 0;
@@ -179,8 +190,8 @@ export default function CashflowTab() {
     };
   }, [filteredByDate]);
 
-  const formatCurrency = (value) =>
-    new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 0 }).format(value);
+  const formatCurrency = (value, currency = displayCurrency) =>
+    formatMoney(value, currency, { minimumFractionDigits: 0 });
 
   const netCashflow = savings; // income - expenses, already rounded
   const netCashflowClass =

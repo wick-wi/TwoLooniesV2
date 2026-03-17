@@ -207,6 +207,10 @@ async def upload_statement(request: Request):
                         amt = t.get("amount")
                         if amt is not None:
                             t["amount"] = round(-float(amt), 2)
+                # Stamp statement currency onto each extracted transaction for UI formatting
+                for t in transactions:
+                    if isinstance(t, dict) and not t.get("currency"):
+                        t["currency"] = currency
                 logger.info("LLM extraction: account_type=%s generates_txns=%s txns=%d holdings=%d", account_type, get_generates_transactions(account_type), len(transactions), len(holdings_list))
 
             finally:
@@ -303,6 +307,7 @@ def _plaid_to_common(txn: dict) -> dict:
         "description": txn.get("name") or txn.get("merchant_name") or "Unknown",
         "amount": round(normalized_amount, 2),
         "category": cat,
+        "currency": txn.get("iso_currency_code") or txn.get("unofficial_currency_code") or "CAD",
     }
 
 
@@ -654,6 +659,7 @@ def _db_txn_to_analysis(t: dict) -> dict:
         "tags": t.get("tags") or [],
         "is_transfer": t.get("is_transfer", False),
         "needs_review": t.get("needs_review", False),
+        "currency": (t.get("currency") or "CAD").strip() or "CAD",
     }
 
 

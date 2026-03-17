@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { Wallet, TrendingUp, PiggyBank, Target, Clock, CreditCard, ChevronRight } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { formatMoney } from '../../utils/money';
 import './WealthTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -159,7 +160,7 @@ export default function WealthTab() {
   }, [expandedItemId, holdingsByKey, fetchHoldings]);
 
   const formatCurrency = (value, currency = 'CAD') =>
-    new Intl.NumberFormat('en-CA', { style: 'currency', currency, minimumFractionDigits: 0 }).format(value);
+    formatMoney(value, currency, { minimumFractionDigits: 0 });
 
   const formatBalanceDate = (dateStr) => {
     if (!dateStr) return null;
