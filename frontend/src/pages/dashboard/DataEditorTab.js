@@ -10,6 +10,7 @@ import TransactionTagInput from '../../components/TransactionTagInput';
 import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, Filter } from 'lucide-react';
 import Select from 'react-select';
 import { supabase } from '../../lib/supabase';
+import { formatMoney } from '../../utils/money';
 import './DataEditorTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -66,7 +67,8 @@ function normalizeTransaction(tx, index) {
     : tx.category ?? tx.personal_finance_category?.primary ?? '';
   const needs_review = tx.needs_review === true;
   const tags = Array.isArray(tx.tags) ? tx.tags : [];
-  return { id: tx.id ?? tx.transaction_id ?? index, date, description, amount, category, needs_review, tags };
+  const currency = tx.currency ?? tx.iso_currency_code ?? tx.unofficial_currency_code ?? null;
+  return { id: tx.id ?? tx.transaction_id ?? index, date, description, amount, category, needs_review, tags, currency };
 }
 
 function uploadErrorMessage(err) {
@@ -494,8 +496,8 @@ export default function DataEditorTab() {
     setPendingBulkAction(null);
   }, []);
 
-  const formatCurrency = (value) =>
-    new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 2 }).format(value);
+  const formatCurrency = (value, currency) =>
+    formatMoney(value, currency || 'CAD', { minimumFractionDigits: 2 });
 
   const formatDate = (d) => {
     if (!d) return '—';
@@ -957,7 +959,7 @@ export default function DataEditorTab() {
                         <td>{formatDate(tx.date)}</td>
                         <td>{tx.description}</td>
                         <td className={`text-right ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}`}>
-                          {formatCurrency(tx.amount)}
+                          {formatCurrency(tx.amount, tx.currency)}
                         </td>
                         <td
                           className={editingTransactionId === tx.id ? 'data-editor-cell-edit' : ''}

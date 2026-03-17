@@ -1,6 +1,7 @@
 import React from 'react';
 import { TrendingUp, TrendingDown } from 'lucide-react';
 import { mockData } from '../../data/mockData';
+import { formatMoney } from '../../utils/money';
 import './DashboardTab.css';
 
 export default function DashboardTab() {
@@ -17,8 +18,7 @@ export default function DashboardTab() {
     aiInsights,
   } = mockData;
 
-  const formatCurrency = (value) =>
-    new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD', minimumFractionDigits: 0 }).format(value);
+  const formatCurrency = (value) => formatMoney(value, 'CAD', { minimumFractionDigits: 0 });
 
   return (
     <div className="dashboard-tab">
