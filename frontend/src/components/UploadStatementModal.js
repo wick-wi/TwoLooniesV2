@@ -4,6 +4,13 @@ import './UploadStatementModal.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 const MAX_STATEMENTS = 12;
+const MAX_STATEMENT_FILE_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per file
+
+function isPdfFile(file) {
+  // Some browsers may not provide a reliable MIME type; fall back to extension.
+  const name = (file?.name || '').toLowerCase();
+  return file?.type === 'application/pdf' || name.endsWith('.pdf');
+}
 
 export default function UploadStatementModal({ onClose, onSuccess, onStartUpload }) {
   const [files, setFiles] = useState([]);
@@ -14,15 +21,21 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
   const handleFileChange = (e) => {
     const chosen = Array.from(e.target.files || []);
     setError(null);
-    const valid = chosen.filter((f) => f.type === 'application/pdf');
-    const invalid = chosen.filter((f) => f.type !== 'application/pdf');
-    if (invalid.length) {
-      setError('Only PDF files are accepted.');
-    }
+
+    const invalidType = chosen.filter((f) => !isPdfFile(f));
+    const oversized = chosen.filter((f) => isPdfFile(f) && f.size > MAX_STATEMENT_FILE_SIZE_BYTES);
+
+    let nextError = null;
+    if (invalidType.length) nextError = 'Only PDF files are accepted.';
+    else if (oversized.length) nextError = 'Each PDF must be up to 1MB per file.';
+
+    const valid = chosen.filter((f) => isPdfFile(f) && f.size <= MAX_STATEMENT_FILE_SIZE_BYTES);
     const combined = [...files, ...valid].slice(0, MAX_STATEMENTS);
     if (valid.length + files.length > MAX_STATEMENTS) {
-      setError(`Maximum ${MAX_STATEMENTS} statements. Only the first ${MAX_STATEMENTS} will be used.`);
+      const maxError = `Maximum ${MAX_STATEMENTS} statements. Only the first ${MAX_STATEMENTS} will be used.`;
+      nextError = nextError ? `${nextError} ${maxError}` : maxError;
     }
+    if (nextError) setError(nextError);
     setFiles(combined);
     e.target.value = '';
   };
@@ -91,7 +104,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <p className="modal-hint">
-              Select up to {MAX_STATEMENTS} bank statement PDFs (e.g. TD, RBC, Scotia).
+              Select up to {MAX_STATEMENTS} bank statement PDFs (e.g. TD, RBC, Scotia). Each PDF must be up to 1MB.
             </p>
             <div className="file-input-wrapper">
               <input

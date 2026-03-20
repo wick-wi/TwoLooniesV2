@@ -6,13 +6,15 @@ import '../components/SignUpModal.css';
 
 export default function ResetPassword() {
   const navigate = useNavigate();
-  const { updatePassword } = useAuth();
+  const { updatePassword, session, loading: authLoading } = useAuth();
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+
+  const hasRecoverySession = !!session;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -39,6 +41,39 @@ export default function ResetPassword() {
       setLoading(false);
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#020617] text-white font-sans flex flex-col items-center justify-center px-6">
+        <p className="text-slate-400">Loading...</p>
+      </div>
+    );
+  }
+
+  if (!hasRecoverySession) {
+    return (
+      <div className="min-h-screen bg-[#020617] text-white font-sans flex flex-col items-center justify-center px-6">
+        <div className="max-w-md w-full text-center">
+          <h1 className="text-2xl font-bold mb-4">Invalid or expired link</h1>
+          <p className="text-slate-400 mb-6">
+            This password reset link is invalid or has expired. Request a new link below.
+          </p>
+          <button
+            onClick={() => navigate('/', { state: { showForgotPassword: true } })}
+            className="px-6 py-3 rounded-lg font-semibold text-black bg-gradient-to-r from-amber-400 to-yellow-600 hover:from-amber-300 hover:to-yellow-500 transition-all"
+          >
+            Request new reset link
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            className="mt-4 block w-full py-2 text-slate-400 hover:text-white transition-colors"
+          >
+            Back to home
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (success) {
     return (

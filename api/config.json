@@ -1,0 +1,5 @@
+{
+  "statement_parser": "pdfplumber",
+  "gemini_model_pass1": "gemini-2.5-flash-lite",
+  "gemini_model_pass2": "gemini-2.5-flash"
+}

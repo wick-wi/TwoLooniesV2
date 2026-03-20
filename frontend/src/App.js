@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AnalysisProvider } from './context/AnalysisContext';
 import { UploadProvider } from './context/UploadContext';
@@ -16,6 +16,15 @@ import './App.css';
 
 function LandingRoute() {
   const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
+  const hash = location.hash || '';
+  const isRecoveryLink = hash.includes('type=recovery');
+
+  // Supabase often redirects password-reset links to Site URL (/) with tokens in the hash.
+  // Send the user to the reset-password page so they see the form instead of being sent to dashboard.
+  if (location.pathname === '/' && isRecoveryLink) {
+    return <Navigate to={`/reset-password${hash}`} replace />;
+  }
   if (!loading && isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }

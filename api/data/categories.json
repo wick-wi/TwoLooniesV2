@@ -52,6 +52,7 @@
       "id": "etransfer",
       "name": "E-Transfer",
       "tier1": "Financial",
+      "force_if_keywords_present": true,
       "keywords": ["INTERAC E-TRF", "E-TRANSFER", "EMAIL TRF"]
     },
     {

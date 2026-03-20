@@ -29,7 +29,7 @@ export default function DashboardShell() {
         <div className="dashboard-shell-header-inner">
           <div className="flex items-center gap-3">
             <img src="/logo.png?v=2" alt="" className="dashboard-shell-logo" aria-hidden />
-            <span className="font-bold text-lg tracking-tight">Two Loonie</span>
+            <span className="font-bold text-lg tracking-tight">Two Loonies</span>
           </div>
           <ProfileMenu onLogout={handleLogout} />
         </div>
