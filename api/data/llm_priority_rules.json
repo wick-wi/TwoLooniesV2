@@ -1,0 +1,15 @@
+{
+  "prompt_rules": [
+    "If the transaction description indicates an Interac e-Transfer (e.g. contains 'INTERAC' and 'E-TRANSFER' / 'E-TRF'), set category to 'E-Transfer' regardless of whether it is Received or Sent.",
+    "Do not classify an Interac e-Transfer as 'Income' unless the description clearly indicates payroll, interest, dividend, etc.",
+    "Do NOT include opening balance, closing balance, previous balance, or new balance summary entries as transactions. These belong only in the metadata fields (opening_balance, closing_balance).",
+    "If the statement provider is Royal Bank of Canada (RBC), be aware that same-day transactions often leave the Date column blank. For RBC statements ONLY: If a row has text followed by a large gap of spaces and then a standalone currency amount aligned to the right, that is a separate transaction. Inherit the date from above. Do NOT apply this whitespace rule to any other bank or to reference numbers/exchange rates."
+  ],
+  "override_rules": [
+    {
+      "category": "E-Transfer",
+      "match_any": ["INTERAC E-TRF", "E-TRANSFER", "EMAIL TRF"]
+    }
+  ]
+}
+

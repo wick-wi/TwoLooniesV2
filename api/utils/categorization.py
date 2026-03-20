@@ -30,6 +30,7 @@ _UNCATEGORIZED = {
 }
 
 _keyword_cache = None
+_forced_keyword_cache = None
 _categories_data_cache: list[dict] | None = None
 
 
@@ -60,6 +61,27 @@ def _load_keywords() -> list[tuple[str, dict]]:
                 pairs.append((kw_upper, cat))
     pairs.sort(key=lambda x: len(x[0]), reverse=True)
     _keyword_cache = pairs
+    return pairs
+
+
+def _load_forced_keywords() -> list[tuple[str, dict]]:
+    """
+    Load (keyword, category_obj) pairs for categories that opt into hard overrides
+    via `force_if_keywords_present` in categories.json.
+    """
+    global _forced_keyword_cache
+    if _forced_keyword_cache is not None:
+        return _forced_keyword_cache
+    pairs = []
+    for cat in _load_categories_data():
+        if not cat.get("force_if_keywords_present"):
+            continue
+        for kw in cat.get("keywords", []):
+            kw_upper = kw.strip().upper()
+            if kw_upper:
+                pairs.append((kw_upper, cat))
+    pairs.sort(key=lambda x: len(x[0]), reverse=True)
+    _forced_keyword_cache = pairs
     return pairs
 
 
@@ -132,3 +154,22 @@ def categorize_transaction(description: str) -> dict:
         **_UNCATEGORIZED,
         "category_name": "Uncategorized",
     }
+
+
+def forced_category_from_description(description: str) -> dict | None:
+    """
+    Return a forced category when high-signal keywords are present.
+
+    This is intended for \"rail\" classifications (e.g. Interac e-Transfers) where
+    we want deterministic behavior even if an LLM labels it differently.
+    """
+    normalized = _normalize_description(description)
+    for kw, cat in _load_forced_keywords():
+        if kw in normalized:
+            return {
+                "category_id": cat["id"],
+                "tier1": cat["tier1"],
+                "is_fixed_cost": cat.get("tier1") == "Fixed",
+                "category_name": cat.get("name", cat["id"]),
+            }
+    return None

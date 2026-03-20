@@ -1,16 +1,19 @@
 """
-Bank statement parsers. Docling-based extraction with optional LLM (Gemini) for metadata and transactions.
+Bank statement parsers. Shared schema in .schema; registry selects active parser via config.
 """
-from .docling_statement import extract_statement_with_llm
 from .account_types_ref import (
     get_valid_account_type_names,
     get_generates_transactions,
     get_plaid_type,
     get_subtype_id,
 )
+from .schema import StatementExtraction
+from .registry import parse_statement_pdf, get_configured_parser_name
 
 __all__ = [
-    "extract_statement_with_llm",
+    "StatementExtraction",
+    "parse_statement_pdf",
+    "get_configured_parser_name",
     "get_valid_account_type_names",
     "get_generates_transactions",
     "get_plaid_type",

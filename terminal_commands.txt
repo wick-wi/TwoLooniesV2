@@ -14,11 +14,11 @@ npx supabase functions deploy categorize_transaction  <function name>
 
 LOCAL - SUPABASE
 npx supabase functions serve <function name> 
+npx supabase start
 
 LOCAL - Backend
 uvicorn api.index:app --reload 
 
 LOCAL - Frontend 
-cd frontend 
-npm start
+cd frontend && npm start
 

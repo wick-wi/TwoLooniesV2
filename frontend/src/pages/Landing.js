@@ -48,7 +48,8 @@ export default function Landing() {
   useEffect(() => {
     if (location.state?.showLogin) setShowLoginModal(true);
     if (location.state?.showSignUp) setShowSignUpModal(true);
-  }, [location.state?.showLogin, location.state?.showSignUp]);
+    if (location.state?.showForgotPassword) setShowForgotPasswordModal(true);
+  }, [location.state?.showLogin, location.state?.showSignUp, location.state?.showForgotPassword]);
 
   const fetchLinkToken = async () => {
     setLinkTokenError(null);
@@ -124,10 +125,10 @@ export default function Landing() {
           <div className="flex items-center gap-3">
             <img
               src="/logo.png?v=2"
-              alt="Two Loonie"
+              alt="Two Loonies"
               className="h-[2.8rem] w-auto sm:h-[3.15rem]"
             />
-            <span className="font-bold text-lg sm:text-xl tracking-tight">Two Loonie</span>
+            <span className="font-bold text-lg sm:text-xl tracking-tight">Two Loonies</span>
           </div>
           <div className="flex items-center gap-3">
             {isAuthenticated ? (
@@ -163,7 +164,7 @@ export default function Landing() {
         <section className="text-center max-w-2xl mx-auto mb-10 sm:mb-12">
           <img
             src="/logo.png?v=2"
-            alt="Two Loonie"
+            alt="Two Loonies"
             className="h-[12.6rem] sm:h-[14.7rem] lg:h-[16.8rem] w-auto mx-auto mb-6 sm:mb-8"
           />
           <h1 className="font-bold text-4xl sm:text-5xl lg:text-6xl tracking-tighter mb-4 sm:mb-5">
@@ -256,7 +257,7 @@ export default function Landing() {
       <footer className="relative z-10 border-t border-white/10 mt-auto py-8 px-6 sm:px-8">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="text-slate-500 text-sm">
-            © 2026 Two Loonie. Built with ❤️ in Canada.
+            © 2026 Two Loonies. Built with ❤️ in Canada.
           </p>
           <nav className="flex items-center gap-6 text-slate-400 text-sm">
             <a href="#security" className="hover:text-white transition-colors duration-200">Security</a>

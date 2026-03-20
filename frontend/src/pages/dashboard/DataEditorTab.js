@@ -7,7 +7,7 @@ import { useAnalysis } from '../../context/AnalysisContext';
 import { useUpload } from '../../context/UploadContext';
 import UploadStatementModal from '../../components/UploadStatementModal';
 import TransactionTagInput from '../../components/TransactionTagInput';
-import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, Filter } from 'lucide-react';
+import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, Filter, ChevronDown, CheckSquare, Scale, ClipboardCheck } from 'lucide-react';
 import Select from 'react-select';
 import { supabase } from '../../lib/supabase';
 import { formatMoney } from '../../utils/money';
@@ -68,7 +68,24 @@ function normalizeTransaction(tx, index) {
   const needs_review = tx.needs_review === true;
   const tags = Array.isArray(tx.tags) ? tx.tags : [];
   const currency = tx.currency ?? tx.iso_currency_code ?? tx.unofficial_currency_code ?? null;
-  return { id: tx.id ?? tx.transaction_id ?? index, date, description, amount, category, needs_review, tags, currency };
+  const statement_id = tx.statement_id ?? null;
+  const account_id = tx.account_id ?? null;
+  const is_transfer = tx.is_transfer === true;
+  const linked_transaction_id = tx.linked_transaction_id ?? null;
+  return {
+    id: tx.id ?? tx.transaction_id ?? index,
+    account_id,
+    date,
+    description,
+    amount,
+    category,
+    needs_review,
+    tags,
+    currency,
+    statement_id,
+    is_transfer,
+    linked_transaction_id,
+  };
 }
 
 function uploadErrorMessage(err) {
@@ -96,7 +113,10 @@ export default function DataEditorTab() {
   const [error, setError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [selectedStatementIds, setSelectedStatementIds] = useState(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const [detectingTransfers, setDetectingTransfers] = useState(false);
   const [categorizing, setCategorizing] = useState(false);
   const [categorizeSuccess, setCategorizeSuccess] = useState(null);
   const [linkToken, setLinkToken] = useState(null);
@@ -111,6 +131,16 @@ export default function DataEditorTab() {
   const [availableTags, setAvailableTags] = useState([]);
   const [editingTagsTransactionId, setEditingTagsTransactionId] = useState(null);
   const categorySelectRef = React.useRef(null);
+  const [expandedAccountIds, setExpandedAccountIds] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem('twoLoonies.dataEditor.expandedAccountIds');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  });
+  const [expandedTransferIds, setExpandedTransferIds] = useState(() => new Set());
 
   // Column filter state
   const [filterDescription, setFilterDescription] = useState('');
@@ -228,6 +258,14 @@ export default function DataEditorTab() {
     fetchUserData();
   }, [isAuthenticated, authLoading, fetchUserData, navigate]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('twoLoonies.dataEditor.expandedAccountIds', JSON.stringify(expandedAccountIds));
+    } catch (_) {
+      // ignore (private mode / disabled storage)
+    }
+  }, [expandedAccountIds]);
+
   const handleDeleteStatement = async (statement) => {
     if (!token) return;
     const id = statement?.id ?? statement;
@@ -248,6 +286,53 @@ export default function DataEditorTab() {
       setError(err.response?.data?.detail || err.message || 'Failed to delete');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const toggleStatementSelected = (id) => {
+    setSelectedStatementIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAccountStatements = (acc) => {
+    const stmtIds = (acc.statements || []).map((s) => s.id);
+    setSelectedStatementIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = stmtIds.every((id) => prev.has(id));
+      if (allSelected) {
+        stmtIds.forEach((id) => next.delete(id));
+      } else {
+        stmtIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleBulkDeleteStatements = async () => {
+    if (!token || selectedStatementIds.size === 0) return;
+    const ids = Array.from(selectedStatementIds);
+    const totalTx = statements
+      .filter((s) => selectedStatementIds.has(s.id))
+      .reduce((sum, s) => sum + (s.transactions?.length ?? 0), 0);
+    const msg = totalTx > 0
+      ? `Delete ${ids.length} statement${ids.length !== 1 ? 's' : ''} and their ${totalTx} transaction${totalTx !== 1 ? 's' : ''}? This cannot be undone.`
+      : `Delete ${ids.length} statement${ids.length !== 1 ? 's' : ''}? This cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    setBulkDeleting(true);
+    try {
+      await axios.post(`${API_BASE}/api/statements/bulk-delete`, { statement_ids: ids }, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setSelectedStatementIds(new Set());
+      await fetchUserData({ background: true });
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to delete statements');
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -272,6 +357,29 @@ export default function DataEditorTab() {
       setError(err.response?.data?.detail || err.message || 'Failed to rerun');
     } finally {
       setRerunning(false);
+    }
+  };
+
+  const handleDetectInternalTransfers = async () => {
+    if (!token) return;
+    setDetectingTransfers(true);
+    setError(null);
+    try {
+      const res = await axios.post(
+        `${API_BASE}/api/detect-internal-transfers`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      // Keep current statements/accounts; just refresh transactions + analysis.
+      setAnalysisData({
+        transactions: res.data.transactions,
+        analysis: res.data.analysis,
+        source: 'pdf',
+      });
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to detect self-transfers');
+    } finally {
+      setDetectingTransfers(false);
     }
   };
 
@@ -505,18 +613,31 @@ export default function DataEditorTab() {
     return isNaN(date.getTime()) ? d : date.toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' });
   };
 
-  const displayTransactionsRaw =
+  const getStatementValidation = (statement) => {
+    const applicable = statement?.validation_applicable === true;
+    const balancesReconciled = statement?.balances_reconciled === true;
+    const allReviewed = statement?.all_reviewed === true;
+    const fullyValidated = statement?.fully_validated === true;
+    return { applicable, balancesReconciled, allReviewed, fullyValidated };
+  };
+
+  // Memoize derived transactions so downstream `useMemo` dependencies remain stable under CI/ESLint.
+  const displayTransactionsRaw = React.useMemo(() => (
     contextTx?.length > 0
       ? contextTx
           .map((t, i) => normalizeTransaction(t, i))
           .filter(Boolean)
           .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      : [];
+      : []
+  ), [contextTx]);
+  const afterStatementFilter = selectedStatementIds.size > 0
+    ? displayTransactionsRaw.filter((tx) => tx.statement_id && selectedStatementIds.has(tx.statement_id))
+    : displayTransactionsRaw;
   const afterNeedsReview = showOnlyNeedsReview
-    ? displayTransactionsRaw.filter(
+    ? afterStatementFilter.filter(
         (tx) => tx.needs_review === true || stickyReviewedIds.includes(tx.id)
       )
-    : displayTransactionsRaw;
+    : afterStatementFilter;
 
   const displayTransactions = React.useMemo(() => {
     let list = afterNeedsReview;
@@ -567,6 +688,40 @@ export default function DataEditorTab() {
     filterCategories,
     filterTags,
   ]);
+
+  const accountIdToName = React.useMemo(() => {
+    const map = new Map();
+    const list = (accountsWithStatements && accountsWithStatements.length > 0)
+      ? accountsWithStatements
+      : (accounts || []);
+    (list || []).forEach((a) => {
+      if (a && a.id) map.set(a.id, a.name || a.provider || 'Account');
+    });
+    return map;
+  }, [accountsWithStatements, accounts]);
+
+  const transactionsById = React.useMemo(() => {
+    const map = new Map();
+    (displayTransactionsRaw || []).forEach((t) => {
+      if (t && t.id != null) map.set(t.id, t);
+    });
+    return map;
+  }, [displayTransactionsRaw]);
+
+  const getTransferMatchText = useCallback((tx) => {
+    if (!tx || !tx.linked_transaction_id) return null;
+    const other = transactionsById.get(tx.linked_transaction_id);
+    if (!other) return null;
+
+    const out = Number(tx.amount) < 0 ? tx : other;
+    const inn = Number(tx.amount) < 0 ? other : tx;
+
+    const outAcc = accountIdToName.get(out.account_id) || 'Unknown account';
+    const inAcc = accountIdToName.get(inn.account_id) || 'Unknown account';
+    const outDate = formatDate(out.date);
+    const inDate = formatDate(inn.date);
+    return `Matched: from ${outAcc} on ${outDate} to ${inAcc} on ${inDate}.`;
+  }, [transactionsById, accountIdToName]);
 
   const hasActiveFilters =
     activeFilterColumn != null ||
@@ -655,6 +810,16 @@ export default function DataEditorTab() {
               <RefreshCw size={18} className={rerunning ? 'spin' : ''} /> {rerunning ? 'Rerunning...' : 'Rerun Analysis'}
             </button>
           )}
+          {statements.length > 0 && (
+            <button
+              onClick={handleDetectInternalTransfers}
+              disabled={detectingTransfers}
+              className="data-editor-btn data-editor-btn-secondary"
+              title="Find and link self-transfers across your accounts"
+            >
+              <RefreshCw size={18} className={detectingTransfers ? 'spin' : ''} /> {detectingTransfers ? 'Detecting self-transfers...' : 'Detect self-transfers'}
+            </button>
+          )}
           <button
             onClick={handleCategorizeWithAI}
             disabled={categorizing || !user?.id || !supabase}
@@ -691,45 +856,157 @@ export default function DataEditorTab() {
             {linkTokenError && <p className="data-editor-empty-error">{linkTokenError}</p>}
           </div>
         ) : (
-          <div className="glass-card data-editor-accounts">
-            {accountsWithStatements.map((acc) => (
-              <div key={acc.id} className="data-editor-account-block">
-                <div className="data-editor-account-header">
-                  <span className="data-editor-account-name">{acc.name}</span>
-                  {acc.account_number && (
-                    <span className="data-editor-account-number">••••{acc.account_number.slice(-4)}</span>
-                  )}
-                  <span className="data-editor-account-type">{acc.account_type}</span>
-                  {acc.provider && <span className="data-editor-account-provider">{acc.provider}</span>}
-                </div>
-                <ul className="data-editor-statements">
-                  {(acc.statements || []).map((s) => (
-                    <li key={s.id} className="data-editor-statement-item">
-                      <div className="data-editor-statement-info">
-                        <FileText size={20} strokeWidth={1.5} />
-                        <span className="data-editor-statement-filename">{s.filename}</span>
-                        <span className="data-editor-statement-meta">
-                          {s.start_date && s.end_date
-                            ? `${formatDate(s.start_date)} – ${formatDate(s.end_date)}`
-                            : (s.transactions?.length ?? 0) > 0
-                              ? `${s.transactions.length} transactions`
-                              : 'Balance / summary (no transaction list)'}
-                        </span>
-                      </div>
-                      <button
-                        onClick={() => handleDeleteStatement(s)}
-                        disabled={deletingId === s.id}
-                        className="data-editor-btn-remove"
-                        aria-label={`Remove ${s.filename}`}
-                      >
-                        <Trash2 size={18} /> {deletingId === s.id ? 'Removing...' : 'Remove'}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+          <>
+            {selectedStatementIds.size > 0 && (
+              <div className="data-editor-selection-bar">
+                <span className="data-editor-selection-count">
+                  <CheckSquare size={16} />
+                  {selectedStatementIds.size} statement{selectedStatementIds.size !== 1 ? 's' : ''} selected
+                  <span className="data-editor-selection-filter-hint">
+                    &middot; showing {afterStatementFilter.length} of {displayTransactionsRaw.length} transaction{displayTransactionsRaw.length !== 1 ? 's' : ''}
+                  </span>
+                </span>
+                <button
+                  onClick={handleBulkDeleteStatements}
+                  disabled={bulkDeleting}
+                  className="data-editor-btn-remove data-editor-btn-bulk-delete"
+                >
+                  <Trash2 size={16} /> {bulkDeleting ? 'Deleting...' : 'Delete Selected'}
+                </button>
+                <button
+                  onClick={() => setSelectedStatementIds(new Set())}
+                  className="data-editor-btn-selection-clear"
+                >
+                  Clear Selection
+                </button>
               </div>
-            ))}
-          </div>
+            )}
+            <div className="glass-card data-editor-accounts">
+              {accountsWithStatements.map((acc) => {
+                const accStmtIds = (acc.statements || []).map((s) => s.id);
+                const allChecked = accStmtIds.length > 0 && accStmtIds.every((id) => selectedStatementIds.has(id));
+                const someChecked = !allChecked && accStmtIds.some((id) => selectedStatementIds.has(id));
+                const accountType = (acc.account_type || '').toLowerCase();
+                const validationApplicable = accountType === 'depository' || accountType === 'credit';
+                const statements = acc.statements || [];
+                const allStatementsBalancesReconciled =
+                  validationApplicable && statements.length > 0 && statements.every((s) => s.balances_reconciled === true);
+                const allStatementsAllReviewed =
+                  validationApplicable && statements.length > 0 && statements.every((s) => s.all_reviewed === true);
+                const accountBalanceTip = validationApplicable
+                  ? (allStatementsBalancesReconciled
+                    ? 'All statements under this account have balances reconciled'
+                    : 'Some statements under this account are not reconciled')
+                  : 'Validation not applicable for this account type yet';
+                const accountReviewTip = validationApplicable
+                  ? (allStatementsAllReviewed
+                    ? 'All statements under this account have been reviewed'
+                    : 'Some statements under this account still need review')
+                  : 'Validation not applicable for this account type yet';
+                return (
+                <details
+                  key={acc.id}
+                  className="data-editor-account-block"
+                  open={expandedAccountIds.includes(acc.id)}
+                  onToggle={(e) => {
+                    const isOpen = e.currentTarget.open;
+                    setExpandedAccountIds((prev) => {
+                      const set = new Set(prev);
+                      if (isOpen) set.add(acc.id);
+                      else set.delete(acc.id);
+                      return Array.from(set);
+                    });
+                  }}
+                >
+                  <summary className="data-editor-account-header">
+                    <input
+                      type="checkbox"
+                      className="data-editor-statement-checkbox"
+                      checked={allChecked}
+                      ref={(el) => { if (el) el.indeterminate = someChecked; }}
+                      onChange={(e) => { e.stopPropagation(); toggleAccountStatements(acc); }}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Select all statements for ${acc.name}`}
+                    />
+                    <ChevronDown size={18} className="data-editor-account-chevron" aria-hidden />
+                    <span className="data-editor-account-name">{acc.name}</span>
+                    <span className="data-editor-account-type">{acc.account_type}</span>
+                    <span className="data-editor-account-validation-icons">
+                      <span
+                        className={`data-editor-statement-validation-icon${allStatementsBalancesReconciled ? ' is-active' : ''}`}
+                        title={accountBalanceTip}
+                        aria-label={accountBalanceTip}
+                      >
+                        <Scale size={14} />
+                      </span>
+                      <span
+                        className={`data-editor-statement-validation-icon${allStatementsAllReviewed ? ' is-active' : ''}`}
+                        title={accountReviewTip}
+                        aria-label={accountReviewTip}
+                      >
+                        <ClipboardCheck size={14} />
+                      </span>
+                    </span>
+                    <span className="data-editor-account-statement-count">
+                      {(acc.statements || []).length} statement{(acc.statements || []).length === 1 ? '' : 's'}
+                    </span>
+                  </summary>
+                  <ul className="data-editor-statements">
+                    {(acc.statements || []).map((s) => (
+                      <li key={s.id} className={`data-editor-statement-item${selectedStatementIds.has(s.id) ? ' data-editor-statement-selected' : ''}`}>
+                        {(() => {
+                          const { applicable, balancesReconciled, allReviewed } = getStatementValidation(s);
+                          const balanceTip = applicable
+                            ? (balancesReconciled ? 'Balances reconcile: opening + transactions = closing' : 'Balances not reconciled yet')
+                            : 'Validation not applicable for this account type yet';
+                          const reviewTip = applicable
+                            ? (allReviewed ? 'All transactions reviewed' : 'Some transactions still need review')
+                            : 'Validation not applicable for this account type yet';
+                          return (
+                        <div className="data-editor-statement-info">
+                          <input
+                            type="checkbox"
+                            className="data-editor-statement-checkbox"
+                            checked={selectedStatementIds.has(s.id)}
+                            onChange={() => toggleStatementSelected(s.id)}
+                            aria-label={`Select ${s.filename}`}
+                          />
+                          <FileText size={20} strokeWidth={1.5} />
+                          <span className="data-editor-statement-filename">{s.filename}</span>
+                          <span className="data-editor-statement-meta">
+                            {s.start_date && s.end_date
+                              ? `${formatDate(s.start_date)} – ${formatDate(s.end_date)}`
+                              : (s.transactions?.length ?? 0) > 0
+                                ? `${s.transactions.length} transactions`
+                                : 'Balance / summary (no transaction list)'}
+                          </span>
+                          <span className="data-editor-statement-validation-icons">
+                            <span className={`data-editor-statement-validation-icon${balancesReconciled ? ' is-active' : ''}`} title={balanceTip} aria-label={balanceTip}>
+                              <Scale size={14} />
+                            </span>
+                            <span className={`data-editor-statement-validation-icon${allReviewed ? ' is-active' : ''}`} title={reviewTip} aria-label={reviewTip}>
+                              <ClipboardCheck size={14} />
+                            </span>
+                          </span>
+                        </div>
+                          );
+                        })()}
+                        <button
+                          onClick={() => handleDeleteStatement(s)}
+                          disabled={deletingId === s.id}
+                          className="data-editor-btn-remove"
+                          aria-label={`Remove ${s.filename}`}
+                        >
+                          <Trash2 size={18} /> {deletingId === s.id ? 'Removing...' : 'Remove'}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+                );
+              })}
+            </div>
+          </>
         )}
       </section>
 
@@ -946,6 +1223,9 @@ export default function DataEditorTab() {
                     displayTransactions.map((tx) => {
                       const isProcessedSticky =
                         showOnlyNeedsReview && !tx.needs_review && stickyReviewedIds.includes(tx.id);
+                      const transferMatchText = tx.is_transfer ? getTransferMatchText(tx) : null;
+                      const isTransferExpandable = tx.is_transfer === true && Boolean(transferMatchText);
+                      const isTransferExpanded = isTransferExpandable && expandedTransferIds.has(tx.id);
                       return (
                       <React.Fragment key={tx.id}>
                         <tr
@@ -957,7 +1237,31 @@ export default function DataEditorTab() {
                             .join(' ')}
                         >
                         <td>{formatDate(tx.date)}</td>
-                        <td>{tx.description}</td>
+                        <td>
+                          <div className="data-editor-desc">
+                            <span className="data-editor-desc-main">{tx.description}</span>
+                            {tx.is_transfer === true && (
+                              <button
+                                type="button"
+                                className="data-editor-transfer-pill"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!isTransferExpandable) return;
+                                  setExpandedTransferIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tx.id)) next.delete(tx.id);
+                                    else next.add(tx.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-expanded={isTransferExpanded}
+                                title={isTransferExpandable ? 'Show match details' : 'Self-Transfer'}
+                              >
+                                Self-Transfer{isTransferExpandable ? (isTransferExpanded ? ' ▲' : ' ▼') : ''}
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td className={`text-right ${tx.amount >= 0 ? 'amount-positive' : 'amount-negative'}`}>
                           {formatCurrency(tx.amount, tx.currency)}
                         </td>
@@ -1047,6 +1351,15 @@ export default function DataEditorTab() {
                           )}
                         </td>
                       </tr>
+                      {isTransferExpanded && (
+                        <tr className="data-editor-transfer-detail-row">
+                          <td colSpan={6}>
+                            <div className="data-editor-transfer-detail">
+                              {transferMatchText}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                       </React.Fragment>
                     );
                     })

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import tempfile
+import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -41,15 +42,44 @@ from dotenv import load_dotenv
 
 env_path = _ROOT / ".env"
 env_local = _ROOT / ".env.local"
-load_dotenv(dotenv_path=env_path)
+# Load project .env then .env.local (override=True so project files win over shell env)
+load_dotenv(dotenv_path=str(env_path), override=True)
 if env_local.exists():
-    load_dotenv(dotenv_path=env_local, override=True)
+    load_dotenv(dotenv_path=str(env_local), override=True)
 
-print("--- SYSTEM CHECK ---")
-print(f"Looking for .env at: {env_path}")
-print(f"File exists? {env_path.exists()}")
-print(f"Client ID loaded: {os.getenv('PLAID_CLIENT_ID') is not None}")
-print("--------------------")
+# Prefer STATEMENT_PARSER from .env.local on disk (override any shell/dotenv quirk)
+_env_local_parser = None
+if env_local.exists():
+    with open(env_local) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("STATEMENT_PARSER="):
+                _env_local_parser = line.split("=", 1)[1].strip().strip('"\'')
+                break
+if _env_local_parser is not None and _env_local_parser.lower() in ("docling", "gemini_native", "pdfplumber"):
+    os.environ["STATEMENT_PARSER"] = _env_local_parser
+
+# Prefer GEMINI_MODEL_PASS2 from .env.local on disk (override any shell/dotenv quirk)
+_env_local_gemini_model_pass1 = None
+_env_local_gemini_model_pass2 = None
+if env_local.exists():
+    with open(env_local) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("GEMINI_MODEL_PASS1="):
+                _env_local_gemini_model_pass1 = line.split("=", 1)[1].strip().strip('"\'')
+                break
+            if line.startswith("GEMINI_MODEL_PASS2="):
+                _env_local_gemini_model_pass2 = line.split("=", 1)[1].strip().strip('"\'')
+                break
+if _env_local_gemini_model_pass1:
+    os.environ["GEMINI_MODEL_PASS1"] = _env_local_gemini_model_pass1
+if _env_local_gemini_model_pass2:
+    os.environ["GEMINI_MODEL_PASS2"] = _env_local_gemini_model_pass2
+
+print(f"STATEMENT_PARSER in use (at startup): {os.environ.get('STATEMENT_PARSER', '(unset)')!r}")
+print(f"GEMINI_MODEL_PASS1 from .env.local file: {_env_local_gemini_model_pass1!r}")
+print(f"GEMINI_MODEL_PASS2 in use (at startup): {os.environ.get('GEMINI_MODEL_PASS2', '(unset)')!r}")
 
 import plaid
 from plaid.api import plaid_api
@@ -64,9 +94,17 @@ import jwt
 
 from .analysis import analyze_transactions
 from .docling_client import pdf_to_markdown
+from .parsers import get_configured_parser_name, parse_statement_pdf
 from .parsers.docling_statement import extract_statement_with_llm
+from .parsers.gemini_native_parser import parse_statement_pdf_native
+from .parsers.pdfplumber_parser import (
+    extract_statement_from_structured_text,
+    parse_statement_pdfplumber,
+    pdf_to_structured_text,
+)
 from .parsers.account_types_ref import get_valid_account_type_names, get_generates_transactions, get_plaid_type
-from .utils.categorization import categorize_transaction, get_category_by_name
+from .utils.categorization import categorize_transaction, forced_category_from_description, get_category_by_name
+from .utils.priority_rules import override_category_from_description
 from .utils.tags import normalize_tags
 try:
     from .supabase_client import supabase
@@ -156,6 +194,235 @@ async def exchange_public_token(payload: dict = Body(...)):
 
 
 MAX_STATEMENTS = 12
+MAX_STATEMENT_FILE_SIZE_BYTES = 1 * 1024 * 1024  # 1MB per file
+
+_CC_OUTFLOW_TYPES = frozenset({"purchase", "fee", "interest", "cash_advance"})
+_CC_INFLOW_TYPES = frozenset({"payment", "credit", "refund"})
+
+_CC_PAYMENT_KEYWORDS = frozenset({
+    "payment", "royal bank", "td bank", "cibc", "bmo", "scotiabank",
+    "national bank", "desjardins", "tangerine", "simplii",
+})
+_CC_CREDIT_KEYWORDS = frozenset({
+    "credit voucher", "refund", "reversal", "cashback", "rebate",
+})
+
+
+def _infer_cc_transaction_type(description: str, llm_type: str) -> str:
+    """Use keywords to override LLM transaction_type when description is unambiguous."""
+    lower = (description or "").lower()
+    if any(kw in lower for kw in _CC_CREDIT_KEYWORDS):
+        return "credit"
+    if any(kw in lower for kw in _CC_PAYMENT_KEYWORDS):
+        return "payment"
+    return llm_type
+
+
+_BALANCE_DESCRIPTION_TOKENS = frozenset({
+    "openingbalance", "closingbalance", "previousbalance", "newbalance",
+    "opening balance", "closing balance", "previous balance", "new balance",
+})
+
+
+def _is_balance_line(description: str | None) -> bool:
+    """Return True if the description looks like a balance summary, not a real transaction."""
+    if not description:
+        return False
+    normed = description.strip().lower().replace("_", " ")
+    if normed in _BALANCE_DESCRIPTION_TOKENS:
+        return True
+    no_spaces = normed.replace(" ", "")
+    return no_spaces in _BALANCE_DESCRIPTION_TOKENS
+
+
+def _strip_balance_lines(transactions: list[dict]) -> list[dict]:
+    """Remove synthetic opening/closing balance entries the LLM sometimes produces."""
+    return [t for t in transactions if not _is_balance_line(t.get("description"))]
+
+
+def _normalize_credit_card_signs(transactions: list[dict]) -> None:
+    """Deterministic sign assignment for credit-card transactions.
+
+    Uses transaction_type (from LLM) with keyword-based override to decide
+    direction, then forces amount to the correct sign:
+      outflow (purchase/fee/interest/cash_advance) → negative
+      inflow  (payment/credit/refund)              → positive
+    """
+    for t in transactions:
+        raw = abs(float(t.get("amount", 0)))
+        llm_type = (t.get("transaction_type") or "purchase").strip().lower()
+        txn_type = _infer_cc_transaction_type(t.get("description", ""), llm_type)
+        if txn_type in _CC_INFLOW_TYPES:
+            t["amount"] = round(raw, 2)
+        else:
+            t["amount"] = round(-raw, 2)
+
+
+_MAX_GROUP_SIZE_FOR_SIGN_FIX = 15
+
+
+def _solve_sign_assignment(abs_values: list[float], expected_delta: float) -> list[int] | None:
+    """Find sign assignment (+1/-1) for each absolute value so the signed sum equals expected_delta.
+
+    Returns list of signs [+1 or -1] if a unique solution exists, else None.
+    Uses subset-sum: sum_of_negatives = (sum_abs - expected_delta) / 2, then
+    brute-forces which subset should be negative (feasible for n <= 15).
+    """
+    n = len(abs_values)
+    total_abs = sum(abs_values)
+    target_neg = (total_abs - expected_delta) / 2.0
+
+    if target_neg < -0.02:
+        return None
+
+    solutions: list[int] = []
+    for mask in range(1 << n):
+        subset_sum = sum(abs_values[i] for i in range(n) if mask & (1 << i))
+        if abs(subset_sum - target_neg) < 0.02:
+            solutions.append(mask)
+            if len(solutions) > 1:
+                return None
+
+    if len(solutions) != 1:
+        return None
+
+    mask = solutions[0]
+    return [-1 if mask & (1 << i) else 1 for i in range(n)]
+
+
+def _validate_signs_from_running_balance(
+    transactions: list[dict],
+    opening_balance: float | None,
+    filename: str = "",
+) -> tuple[int, bool, int, int]:
+    """Use running_balance to detect and fix sign errors.
+
+    Two-pass approach:
+      Pass 1 – Group-level: collect segments of transactions between known
+               balances, then use subset-sum to find the correct sign
+               assignment for the entire group.
+      Pass 2 – Verification: re-walk the chain and report any remaining
+               mismatches.
+
+    Returns:
+      - corrections: total count of sign corrections applied
+      - validation_ok: True when validation passes (or no checkable running balances exist)
+      - mismatch_count: number of remaining running-balance mismatches
+      - validated_count: number of transactions with non-null running_balance
+    """
+    corrections = 0
+    corrected_details: list[str] = []
+
+    # --- Pass 1: group-level sign correction ---
+    groups: list[tuple[float, list[dict], float]] = []
+    prev_balance = opening_balance
+    current_group: list[dict] = []
+
+    for t in transactions:
+        current_group.append(t)
+        rb = t.get("running_balance")
+        if rb is not None:
+            if prev_balance is not None:
+                groups.append((prev_balance, current_group, rb))
+            prev_balance = rb
+            current_group = []
+
+    for group_prev, group_txns, group_rb in groups:
+        expected_delta = round(group_rb - group_prev, 2)
+        current_sum = round(sum(float(t.get("amount", 0)) for t in group_txns), 2)
+
+        if abs(current_sum - expected_delta) < 0.02:
+            continue
+
+        if len(group_txns) == 1:
+            t = group_txns[0]
+            amount = float(t.get("amount", 0))
+            if abs(amount) > 0.001 and abs(abs(amount) - abs(expected_delta)) < 0.02:
+                if (amount > 0) != (expected_delta > 0):
+                    old_amount = amount
+                    t["amount"] = round(expected_delta, 2)
+                    corrections += 1
+                    corrected_details.append(
+                        f"  {t.get('date')} {t.get('description', '')[:40]}: "
+                        f"{old_amount:+.2f} -> {t['amount']:+.2f} "
+                        f"(balance {group_prev:.2f} -> {group_rb:.2f})"
+                    )
+            continue
+
+        if len(group_txns) > _MAX_GROUP_SIZE_FOR_SIGN_FIX:
+            logger.warning(
+                "Skipping group sign-fix for %s: group of %d transactions too large (max %d)",
+                filename, len(group_txns), _MAX_GROUP_SIZE_FOR_SIGN_FIX,
+            )
+            continue
+
+        abs_values = [abs(float(t.get("amount", 0))) for t in group_txns]
+        signs = _solve_sign_assignment(abs_values, expected_delta)
+        if signs is None:
+            continue
+
+        for i, t in enumerate(group_txns):
+            old_amount = float(t.get("amount", 0))
+            new_amount = round(signs[i] * abs_values[i], 2)
+            if abs(old_amount - new_amount) > 0.001:
+                t["amount"] = new_amount
+                corrections += 1
+                corrected_details.append(
+                    f"  {t.get('date')} {t.get('description', '')[:40]}: "
+                    f"{old_amount:+.2f} -> {new_amount:+.2f} "
+                    f"(group balance {group_prev:.2f} -> {group_rb:.2f})"
+                )
+
+    if corrected_details:
+        logger.info(
+            "Running balance sign corrections for %s (%d fixed):\n%s",
+            filename, corrections, "\n".join(corrected_details),
+        )
+
+    # --- Pass 2: verification walk ---
+    prev_balance = opening_balance
+    mismatches: list[str] = []
+    for t in transactions:
+        rb = t.get("running_balance")
+        if prev_balance is None:
+            # If we don't have an anchor yet, only advance when the model provides rb.
+            if rb is not None:
+                prev_balance = rb
+            continue
+
+        amount = float(t.get("amount", 0))
+        expected_rb = round(prev_balance + amount, 2)
+
+        if rb is not None:
+            # Compare only when the model claims a running_balance, but always keep the chain moving.
+            if abs(expected_rb - rb) > 0.02:
+                mismatches.append(
+                    f"  {t.get('date')} {t.get('description', '')[:40]}: "
+                    f"expected balance {expected_rb:.2f}, got {rb:.2f} "
+                    f"(prev={prev_balance:.2f}, amount={amount:+.2f})"
+                )
+            prev_balance = rb  # anchor to the model-provided running balance
+        else:
+            # rb=None means we can't verify this step, but it still affects subsequent balances.
+            prev_balance = expected_rb
+
+    validated_count = sum(1 for t in transactions if t.get("running_balance") is not None)
+    mismatch_count = len(mismatches)
+    validation_ok = mismatch_count == 0 or validated_count == 0
+
+    if mismatch_count:
+        logger.warning(
+            "Running balance validation: %d mismatch(es) remain after corrections for %s:\n%s",
+            mismatch_count, filename, "\n".join(mismatches),
+        )
+    else:
+        if validated_count > 0:
+            logger.info(
+                "Running balance validation: all %d checkable transactions passed for %s",
+                validated_count, filename,
+            )
+
+    return corrections, validation_ok, mismatch_count, validated_count
 
 
 @app.post("/api/upload_statement")
@@ -174,8 +441,14 @@ async def upload_statement(request: Request):
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         return {"error": "GOOGLE_API_KEY or GEMINI_API_KEY required for statement extraction (Docling + Gemini)."}
 
+    parser_name = get_configured_parser_name()
+    logger.info("STATEMENT_PARSER env=%r -> using parser: %s", os.environ.get("STATEMENT_PARSER"), parser_name)
+
     all_transactions = []
     files_breakdown = []
+    storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
+    _try_create_storage_bucket = bool(supabase and storage_bucket_name)
+    _storage_bucket_created = False
 
     for idx, stmt in enumerate(statements):
         fname = stmt.filename or f"file_{idx}"
@@ -184,34 +457,185 @@ async def upload_statement(request: Request):
             return {"error": f"Only PDF files accepted. '{fname}' is not a PDF."}
         logger.info("Processing: %s", fname)
         try:
-            content = await stmt.read()
+            # Read up to (max + 1) bytes so we can reject oversize files
+            # without buffering the entire payload into memory.
+            content = await stmt.read(MAX_STATEMENT_FILE_SIZE_BYTES + 1)
+            if len(content) > MAX_STATEMENT_FILE_SIZE_BYTES:
+                logger.warning("Rejected: %s is larger than %d bytes", fname, MAX_STATEMENT_FILE_SIZE_BYTES)
+                return {"error": f"Each PDF must be up to 1MB per file. '{fname}' is too large."}
             logger.info("Received %d bytes", len(content))
+
+            storage_path = None
+            if supabase and storage_bucket_name:
+                if _try_create_storage_bucket and not _storage_bucket_created:
+                    try:
+                        supabase.storage.create_bucket(storage_bucket_name, options={"public": False})
+                    except Exception:
+                        # Bucket likely already exists or storage isn't configured; continue without failing the upload.
+                        pass
+                    _storage_bucket_created = True
+
+                # Keep storage object key opaque; later we link it via `user_statements.storage_path`.
+                object_key = f"statement-pdfs/{uuid.uuid4()}.pdf"
+                try:
+                    supabase.storage.from_(storage_bucket_name).upload(
+                        object_key,
+                        content,
+                        {"content-type": "application/pdf"},
+                    )
+                    storage_path = f"{storage_bucket_name}/{object_key}"
+                except Exception as e:
+                    logger.warning("Supabase Storage upload failed for %s: %s", fname, e)
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
-                markdown = pdf_to_markdown(tmp_path, filename=fname)
-                meta, txns_list, holdings_list = extract_statement_with_llm(markdown)
-                provider = meta.get("provider") or "Unknown"
-                account_id_from_stmt = meta.get("account_id")
-                opening_balance = meta.get("opening_balance")
-                closing_balance = meta.get("closing_balance")
-                currency = meta.get("currency") or "CAD"
-                start_date = meta.get("start_date")
-                end_date = meta.get("end_date")
-                account_type = meta.get("account_type") or "Chequing"
-                transactions = txns_list if get_generates_transactions(account_type) else []
-                # Credit card statements: expenses are positive, payments negative; flip to app convention (negative = outflow, positive = inflow)
-                if account_type == "Credit Card":
+                from .utils.gemini_model import (
+                    get_configured_genai_model,
+                    get_configured_genai_model_pass2,
+                    get_configured_instructor_model_pass2,
+                )
+
+                PASS1_MODEL = get_configured_genai_model()
+                PASS2_MODEL = get_configured_genai_model_pass2()
+                PASS3_INSTRUCTOR_MODEL = get_configured_instructor_model_pass2()
+
+                # --- Shared work: pdfplumber conversion (Pass 1 + Pass 2) ---
+                structured_text = pdf_to_structured_text(Path(tmp_path))
+                if not structured_text.strip():
+                    raise RuntimeError(
+                        "This PDF appears to be scanned images (no extractable text). "
+                        "OCR/image-only PDF support is a feature coming soon."
+                    )
+
+                def _process_extraction(*, extraction, extraction_method: str) -> tuple[list[dict], list[dict], dict]:
+                    meta = extraction.model_dump()
+                    txns_list = meta.pop("transactions", [])
+                    holdings_list = meta.pop("holdings", [])
+                    provider = meta.get("provider") or "Unknown"
+                    account_id_from_stmt = meta.get("account_id")
+                    opening_balance = meta.get("opening_balance")
+                    closing_balance = meta.get("closing_balance")
+                    currency = meta.get("currency") or "CAD"
+                    start_date = meta.get("start_date")
+                    end_date = meta.get("end_date")
+                    account_type = meta.get("account_type") or "Chequing"
+
+                    transactions = txns_list if get_generates_transactions(account_type) else []
+                    transactions = _strip_balance_lines(transactions)
+
+                    running_ok = True
+                    running_mismatch_count = 0
+                    running_validated_count = 0
+
+                    if account_type != "Credit Card":
+                        _, running_ok, running_mismatch_count, running_validated_count = _validate_signs_from_running_balance(
+                            transactions,
+                            opening_balance,
+                            filename=fname,
+                        )
+                    if account_type == "Credit Card":
+                        _normalize_credit_card_signs(transactions)
+
+                    closing_ok = True
+                    if transactions and closing_balance is not None:
+                        last_rb = None
+                        for t in reversed(transactions):
+                            if t.get("running_balance") is not None:
+                                last_rb = t["running_balance"]
+                                break
+                        if last_rb is not None and abs(last_rb - closing_balance) > 0.02:
+                            closing_ok = False
+
+                    validation_ok = running_ok and closing_ok
+
+                    # Stamp statement currency onto each extracted transaction for UI formatting
                     for t in transactions:
-                        amt = t.get("amount")
-                        if amt is not None:
-                            t["amount"] = round(-float(amt), 2)
-                # Stamp statement currency onto each extracted transaction for UI formatting
-                for t in transactions:
-                    if isinstance(t, dict) and not t.get("currency"):
-                        t["currency"] = currency
-                logger.info("LLM extraction: account_type=%s generates_txns=%s txns=%d holdings=%d", account_type, get_generates_transactions(account_type), len(transactions), len(holdings_list))
+                        if isinstance(t, dict) and not t.get("currency"):
+                            t["currency"] = currency
+
+                    logger.info(
+                        "LLM extraction: method=%s account_type=%s generates_txns=%s txns=%d holdings=%d validation_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s)",
+                        extraction_method,
+                        account_type,
+                        get_generates_transactions(account_type),
+                        len(transactions),
+                        len(holdings_list),
+                        validation_ok,
+                        running_mismatch_count,
+                        running_validated_count,
+                        closing_ok,
+                    )
+
+                    extra = {
+                        "validation_ok": validation_ok,
+                        "running_mismatch_count": running_mismatch_count,
+                        "running_validated_count": running_validated_count,
+                        "closing_ok": closing_ok,
+                        "extraction_method": extraction_method,
+                        "provider": provider,
+                        "account_id_from_stmt": account_id_from_stmt,
+                        "opening_balance": opening_balance,
+                        "closing_balance": closing_balance,
+                        "currency": currency,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "account_type": account_type,
+                        "holdings_list": holdings_list,
+                    }
+                    return transactions, holdings_list, extra
+
+                # Pass 1
+                extraction1 = extract_statement_from_structured_text(
+                    structured_text,
+                    model=PASS1_MODEL,
+                )
+                transactions, holdings_list, extra = _process_extraction(
+                    extraction=extraction1,
+                    extraction_method=f"pdfplumber+{PASS1_MODEL}",
+                )
+
+                # Pass 2 (retry on validation failure)
+                pass2_used = False
+                pass3_used = False
+                if not extra["validation_ok"]:
+                    pass2_used = True
+                    extraction2 = extract_statement_from_structured_text(
+                        structured_text,
+                        model=PASS2_MODEL,
+                    )
+                    transactions, holdings_list, extra = _process_extraction(
+                        extraction=extraction2,
+                        extraction_method=f"pdfplumber+{PASS2_MODEL}",
+                    )
+
+                # Pass 3 (docling markdown + stronger Gemini) if still failing validation
+                if not extra["validation_ok"]:
+                    pass3_used = True
+                    from .parsers.schema import StatementExtraction
+
+                    markdown = pdf_to_markdown(Path(tmp_path), filename=fname)
+                    docling_meta, docling_txns, docling_holdings = extract_statement_with_llm(
+                        markdown,
+                        model=PASS3_INSTRUCTOR_MODEL,
+                    )
+                    extraction3 = StatementExtraction.model_validate(
+                        {**docling_meta, "transactions": docling_txns, "holdings": docling_holdings}
+                    )
+                    transactions, holdings_list, extra = _process_extraction(
+                        extraction=extraction3,
+                        extraction_method=f"docling+{PASS2_MODEL}",
+                    )
+
+                provider = extra["provider"]
+                account_id_from_stmt = extra["account_id_from_stmt"]
+                opening_balance = extra["opening_balance"]
+                closing_balance = extra["closing_balance"]
+                currency = extra["currency"]
+                start_date = extra["start_date"]
+                end_date = extra["end_date"]
+                account_type = extra["account_type"]
 
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
@@ -230,7 +654,11 @@ async def upload_statement(request: Request):
                 "currency": currency,
                 "start_date": start_date,
                 "end_date": end_date,
-                "extraction_method": "docling_gemini",
+                "storage_path": storage_path,
+                "extraction_method": extra.get("extraction_method"),
+                "retry_pass_2_used": pass2_used,
+                "retry_pass_3_used": pass3_used,
+                "validation_ok": extra.get("validation_ok"),
             })
         except Exception as e:
             logger.exception("Failed to parse %s: %s", fname, e)
@@ -281,6 +709,45 @@ async def upload_statement(request: Request):
     }
 
 
+@app.post("/api/v1/test-native-pdf-parse")
+async def test_native_pdf_parse(file: UploadFile = File(...)):
+    """
+    Test endpoint for native PDF parsing (Gemini Files API + structured output).
+    Isolated from Docling and existing statement upload route.
+    """
+    fname = file.filename or "statement.pdf"
+    if not fname.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    if file.content_type and "pdf" not in file.content_type.lower():
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+
+    tmp_path = None
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file upload")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+
+        result = parse_statement_pdf_native(Path(tmp_path))
+        return result.model_dump()
+    except HTTPException:
+        raise
+    except ValueError as e:
+        msg = str(e)
+        if "GEMINI_API_KEY" in msg:
+            raise HTTPException(status_code=500, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
 @app.post("/api/analyze_transactions")
 async def analyze_transactions_endpoint(payload: dict = Body(...)):
     """Analyze transaction list and return insights."""
@@ -329,6 +796,7 @@ async def get_plaid_transactions(payload: dict = Body(...)):
         raw = resp.to_dict() if hasattr(resp, "to_dict") else dict(resp)
         plaid_txns = raw.get("transactions", [])
         transactions = [_plaid_to_common(t) for t in plaid_txns]
+        _apply_categorization(transactions)
         analysis = analyze_transactions(transactions)
         return {"transactions": transactions, "analysis": analysis, "source": "plaid"}
     except plaid.ApiException as e:
@@ -348,13 +816,23 @@ def _apply_categorization(transactions: list[dict]) -> tuple[int, int]:
         desc = t.get("description") or t.get("clean_merchant") or "Unknown"
         confidence = t.get("confidence_score")
         llm_category = (t.get("category") or "").strip()
+
+        # 1) Forced overrides from categories.json (rail-level deterministic matches)
+        forced = forced_category_from_description(desc)
+
+        # 2) Priority overrides from llm_priority_rules.json
+        priority_name = None if forced is not None else override_category_from_description(desc)
+        priority = get_category_by_name(priority_name) if priority_name else None
+
         use_llm = (
-            isinstance(confidence, (int, float))
+            forced is None
+            and priority is None
+            and isinstance(confidence, (int, float))
             and float(confidence) >= 0.8
             and llm_category
             and llm_category.lower() != "uncategorized"
         )
-        result = get_category_by_name(llm_category) if use_llm else None
+        result = forced or priority or (get_category_by_name(llm_category) if use_llm else None)
         if result is None:
             result = categorize_transaction(desc)
         t["category"] = result.get("category_name", result.get("category_id"))
@@ -476,9 +954,21 @@ def _detect_internal_transfers(db_transactions: list[dict], user_id: str) -> set
     """
     Find pairs of transactions that look like internal transfers between accounts.
     Outgoing (amount < 0) in one account matches incoming (amount > 0) in another, same amount, within ±3 days.
+
+    Edge case: one debit can match multiple credits (and vice versa). We enforce a 1:1 pairing by
+    generating candidates and greedily taking the closest-date matches first.
+
     Returns set of (txn_id_out, txn_id_in) pairs.
     """
     from datetime import datetime as dt
+
+    def _to_date(v):
+        if not v:
+            return None
+        try:
+            return dt.strptime(str(v)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return None
 
     by_account: dict[str, list[dict]] = defaultdict(list)
     for t in db_transactions:
@@ -486,43 +976,62 @@ def _detect_internal_transfers(db_transactions: list[dict], user_id: str) -> set
         if aid:
             by_account[aid].append(t)
 
-    pairs = set()
+    # Build candidate pairs across account combinations, then greedily assign 1:1
+    candidates: list[tuple[int, str, str]] = []  # (abs_day_diff, tid_out, tid_in)
     account_ids = list(by_account.keys())
     for i, aid_a in enumerate(account_ids):
         for aid_b in account_ids[i + 1 :]:  # noqa: E203
-            outgoings = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_a] if float(t.get("amount", 0) or 0) < 0]
-            incomings = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_b] if float(t.get("amount", 0) or 0) > 0]
-            for tout, amt_out in outgoings:
-                for tin, amt_in in incomings:
-                    if abs(abs(amt_out) - amt_in) < 0.02:  # epsilon for float
-                        dout = tout.get("date")
-                        din = tin.get("date")
-                        if dout and din:
-                            try:
-                                d1 = dt.strptime(str(dout)[:10], "%Y-%m-%d").date()
-                                d2 = dt.strptime(str(din)[:10], "%Y-%m-%d").date()
-                                if abs((d1 - d2).days) <= 3:
-                                    tid_out, tid_in = tout.get("id"), tin.get("id")
-                                    if tid_out and tid_in:
-                                        pairs.add((tid_out, tid_in))
-                            except (ValueError, TypeError):
-                                pass
-            outgoings_b = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_b] if float(t.get("amount", 0) or 0) < 0]
-            incomings_a = [(t, float(t.get("amount", 0) or 0)) for t in by_account[aid_a] if float(t.get("amount", 0) or 0) > 0]
-            for tout, amt_out in outgoings_b:
-                for tin, amt_in in incomings_a:
+            a_rows = by_account[aid_a]
+            b_rows = by_account[aid_b]
+
+            a_out = [(t, float(t.get("amount", 0) or 0), _to_date(t.get("date"))) for t in a_rows if float(t.get("amount", 0) or 0) < 0]
+            a_in = [(t, float(t.get("amount", 0) or 0), _to_date(t.get("date"))) for t in a_rows if float(t.get("amount", 0) or 0) > 0]
+            b_out = [(t, float(t.get("amount", 0) or 0), _to_date(t.get("date"))) for t in b_rows if float(t.get("amount", 0) or 0) < 0]
+            b_in = [(t, float(t.get("amount", 0) or 0), _to_date(t.get("date"))) for t in b_rows if float(t.get("amount", 0) or 0) > 0]
+
+            # a_out -> b_in
+            for tout, amt_out, dout in a_out:
+                if not dout:
+                    continue
+                tid_out = tout.get("id")
+                if not tid_out:
+                    continue
+                for tin, amt_in, din in b_in:
+                    if not din:
+                        continue
                     if abs(abs(amt_out) - amt_in) < 0.02:
-                        dout, din = tout.get("date"), tin.get("date")
-                        if dout and din:
-                            try:
-                                d1 = dt.strptime(str(dout)[:10], "%Y-%m-%d").date()
-                                d2 = dt.strptime(str(din)[:10], "%Y-%m-%d").date()
-                                if abs((d1 - d2).days) <= 3:
-                                    tid_out, tid_in = tout.get("id"), tin.get("id")
-                                    if tid_out and tid_in:
-                                        pairs.add((tid_out, tid_in))
-                            except (ValueError, TypeError):
-                                pass
+                        day_diff = abs((dout - din).days)
+                        if day_diff <= 3:
+                            tid_in = tin.get("id")
+                            if tid_in:
+                                candidates.append((day_diff, tid_out, tid_in))
+
+            # b_out -> a_in
+            for tout, amt_out, dout in b_out:
+                if not dout:
+                    continue
+                tid_out = tout.get("id")
+                if not tid_out:
+                    continue
+                for tin, amt_in, din in a_in:
+                    if not din:
+                        continue
+                    if abs(abs(amt_out) - amt_in) < 0.02:
+                        day_diff = abs((dout - din).days)
+                        if day_diff <= 3:
+                            tid_in = tin.get("id")
+                            if tid_in:
+                                candidates.append((day_diff, tid_out, tid_in))
+
+    candidates.sort(key=lambda x: x[0])  # closest date first
+    used: set[str] = set()
+    pairs: set[tuple[str, str]] = set()
+    for _, tid_out, tid_in in candidates:
+        if tid_out in used or tid_in in used:
+            continue
+        used.add(tid_out)
+        used.add(tid_in)
+        pairs.add((tid_out, tid_in))
     return pairs
 
 
@@ -564,8 +1073,16 @@ def _get_or_create_account_by_provider_and_number(
     ).eq("account_number", account_number).limit(1).execute()
     if resp and getattr(resp, "data", None) and resp.data and len(resp.data) > 0 and resp.data[0].get("id"):
         return resp.data[0]["id"]
-    name = f"{provider} – {account_number}" if provider and account_number else "Imported Statements"
-    plaid_type = get_plaid_type(account_subtype) or "depository"
+    display_subtype = (account_subtype or "").strip()
+    plaid_type = get_plaid_type(display_subtype) or "depository"
+    display_label = display_subtype or plaid_type
+    masked_last4 = f"••••{account_number[-4:]}" if len(account_number) >= 4 else f"••••{account_number}"
+    if provider and display_label:
+        name = f"{provider} – {display_label} ({masked_last4})"
+    elif provider:
+        name = f"{provider} ({masked_last4})"
+    else:
+        name = f"{display_label} ({masked_last4})"
     ins = supabase.table("accounts").insert({
         "user_id": user_id,
         "name": name,
@@ -652,15 +1169,113 @@ def _db_txn_to_analysis(t: dict) -> dict:
     return {
         "id": t.get("id"),
         "account_id": t.get("account_id"),
+        "statement_id": t.get("statement_id"),
         "date": str(t.get("date", "")) if t.get("date") else "",
         "description": _strip_date_prefix_from_description(t.get("description") or t.get("clean_merchant")),
         "amount": float(t.get("amount", 0)),
         "category": t.get("category"),
         "tags": t.get("tags") or [],
         "is_transfer": t.get("is_transfer", False),
+        "linked_transaction_id": t.get("linked_transaction_id"),
         "needs_review": t.get("needs_review", False),
         "currency": (t.get("currency") or "CAD").strip() or "CAD",
     }
+
+
+VALIDATABLE_STATEMENT_ACCOUNT_TYPES = {"depository", "credit"}
+STATEMENT_BALANCE_TOLERANCE = 0.02
+
+
+def _to_float_or_none(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _statement_open_close_from_balances(statement: dict, statement_balance_rows: list[dict]) -> tuple[float | None, float | None]:
+    """Return (opening, closing) from balances rows for a statement."""
+    if not statement_balance_rows:
+        return None, None
+
+    start_date = str(statement.get("start_date")) if statement.get("start_date") else None
+    end_date = str(statement.get("end_date")) if statement.get("end_date") else None
+
+    opening = None
+    closing = None
+    sorted_rows = sorted(
+        statement_balance_rows,
+        key=lambda r: str(r.get("date") or ""),
+    )
+
+    if start_date:
+        for row in sorted_rows:
+            if str(row.get("date")) == start_date:
+                opening = _to_float_or_none(row.get("amount"))
+                break
+    if end_date:
+        for row in sorted_rows:
+            if str(row.get("date")) == end_date:
+                closing = _to_float_or_none(row.get("amount"))
+                break
+
+    # Fallback for imperfect metadata: first and last balance row for this statement.
+    if opening is None and sorted_rows:
+        opening = _to_float_or_none(sorted_rows[0].get("amount"))
+    if closing is None and sorted_rows:
+        closing = _to_float_or_none(sorted_rows[-1].get("amount"))
+    return opening, closing
+
+
+def _annotate_statement_validation(
+    statements: list[dict],
+    accounts: list[dict],
+    db_transactions: list[dict],
+    balance_rows: list[dict],
+) -> None:
+    """Compute per-statement validation flags used by Data Editor UI."""
+    account_type_by_id: dict[str, str] = {}
+    for account in accounts or []:
+        aid = _normalize_uuid(account.get("id"))
+        if aid:
+            account_type_by_id[aid] = str(account.get("account_type") or "").strip().lower()
+
+    tx_by_stmt: dict[str, list[dict]] = defaultdict(list)
+    for tx in db_transactions or []:
+        sid = _normalize_uuid(tx.get("statement_id"))
+        if sid:
+            tx_by_stmt[sid].append(tx)
+
+    balances_by_stmt: dict[str, list[dict]] = defaultdict(list)
+    for row in balance_rows or []:
+        sid = _normalize_uuid(row.get("statement_id"))
+        if sid:
+            balances_by_stmt[sid].append(row)
+
+    for statement in statements or []:
+        sid = _normalize_uuid(statement.get("id"))
+        account_id = _normalize_uuid(statement.get("account_id"))
+        account_type = account_type_by_id.get(account_id, "")
+        applicable = account_type in VALIDATABLE_STATEMENT_ACCOUNT_TYPES
+
+        statement_txs = tx_by_stmt.get(sid, [])
+        all_reviewed = bool(applicable and all(not bool(tx.get("needs_review")) for tx in statement_txs))
+
+        opening, closing = _statement_open_close_from_balances(statement, balances_by_stmt.get(sid, []))
+        tx_sum = sum(_to_float_or_none(tx.get("amount")) or 0.0 for tx in statement_txs)
+        balances_reconciled = bool(
+            applicable
+            and opening is not None
+            and closing is not None
+            and abs((opening + tx_sum) - closing) <= STATEMENT_BALANCE_TOLERANCE
+        )
+
+        statement["validation_applicable"] = applicable
+        statement["balances_reconciled"] = balances_reconciled
+        statement["all_reviewed"] = all_reviewed
+        statement["fully_validated"] = bool(balances_reconciled and all_reviewed)
 
 
 def _get_user_from_token(authorization: str = None):
@@ -1006,6 +1621,7 @@ async def get_user_data(authorization: str = Header(None, alias="Authorization")
             balances = getattr(bal_resp, "data", None) or []
         except Exception:
             pass
+        _annotate_statement_validation(statements, accounts, db_transactions, balances)
 
         analysis = analyze_transactions(all_transactions)
         return {
@@ -1114,6 +1730,9 @@ async def save_statements(
         flagged_count = 0
 
         for item in items:
+            # IMPORTANT: This tracking must be scoped to the current statement item.
+            # If it persisted across items, `occurrence_index` would be inflated for later uploads.
+            signature_counts = {}
             fn = item.get("filename") or "statement.pdf"
             txns = item.get("transactions") or []
             if not isinstance(txns, list):
@@ -1152,7 +1771,7 @@ async def save_statements(
                 "user_id": user_id,
                 "account_id": account_id,
                 "filename": fn,
-                "storage_path": None,
+                "storage_path": item.get("storage_path"),
                 "start_date": start_date,
                 "end_date": end_date,
                 "provider": provider,
@@ -1216,13 +1835,18 @@ async def save_statements(
             if not get_generates_transactions(account_subtype):
                 txns = []
 
+            txns = _strip_balance_lines(txns)
+
             for txn in txns:
                 raw_date = txn.get("date")
                 norm_date = _normalize_date_for_db(raw_date)
                 if not norm_date:
                     continue
                 desc = _strip_date_prefix_from_description(txn.get("description"))
-                amount = txn.get("amount", 0)
+                amount_rounded = round(float(txn.get("amount", 0) or 0), 2)
+                sig = (norm_date, amount_rounded, desc)
+                occurrence_index = signature_counts.get(sig, 0) + 1
+                signature_counts[sig] = occurrence_index
                 txn_row = {
                     "user_id": user_id,
                     "account_id": account_id,
@@ -1230,60 +1854,42 @@ async def save_statements(
                     "date": norm_date,
                     "description": desc,
                     "clean_merchant": txn.get("clean_merchant"),
-                    "amount": amount,
+                    "amount": amount_rounded,
                     "category": txn.get("category"),
                     "is_fixed_cost": txn.get("is_fixed_cost", False),
                     "needs_review": txn.get("needs_review", False),
+                    "occurrence_index": occurrence_index,
                     "currency": currency,
                 }
                 all_txn_rows.append(txn_row)
 
-        # Pre-query existing transactions to count and skip duplicates (per account)
-        duplicates_skipped = 0
-        rows_to_upsert = all_txn_rows
-        if all_txn_rows:
-            account_ids_in_batch = list({r["account_id"] for r in all_txn_rows})
-            batch_dates = [r["date"] for r in all_txn_rows]
-            min_d, max_d = min(batch_dates), max(batch_dates)
-            existing_sigs_by_account = {}
-            for aid in account_ids_in_batch:
-                existing = supabase.table("transactions").select("date,amount,description").eq(
-                    "account_id", aid
-                ).gte("date", min_d).lte("date", max_d).execute()
-                existing_sigs_by_account[aid] = {
-                    (str(r["date"]), round(float(r["amount"] or 0), 2), r.get("description") or "")
-                    for r in (getattr(existing, "data", None) or [])
-                }
-            rows_to_upsert = []
-            for row in all_txn_rows:
-                aid = row["account_id"]
-                sig = (row["date"], round(float(row["amount"] or 0), 2), row.get("description") or "")
-                if existing_sigs_by_account.get(aid, set()) and sig in existing_sigs_by_account[aid]:
-                    duplicates_skipped += 1
-                else:
-                    rows_to_upsert.append(row)
-                    if aid not in existing_sigs_by_account:
-                        existing_sigs_by_account[aid] = set()
-                    existing_sigs_by_account[aid].add(sig)
-
-        # Upsert transactions (ignore duplicates to avoid overwriting)
-        for txn_row in rows_to_upsert:
+        # Upsert transactions (ignore duplicates; uniqueness is enforced in DB).
+        for txn_row in all_txn_rows:
             supabase.table("transactions").upsert(
                 txn_row,
-                on_conflict="account_id,date,amount,description",
+                on_conflict="account_id,date,amount,description,occurrence_index",
                 ignore_duplicates=True,
             ).execute()
 
-        # Fetch all user transactions and run transfer detection
+        # Recompute internal transfer links for this user (avoid stale links on re-upload/delete).
+        # 1) Clear all previous transfer marks/links for the user
+        supabase.table("transactions").update(
+            {"is_transfer": False, "linked_transaction_id": None}
+        ).eq("user_id", user_id).execute()
+
+        # 2) Fetch all user transactions and run transfer detection
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
         db_transactions = getattr(tx_resp, "data", None) or []
         transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
-        transfer_ids = set()
+
+        # 3) Persist 1:1 links + transfer marker on both sides
         for tid_out, tid_in in transfer_pairs:
-            transfer_ids.add(tid_out)
-            transfer_ids.add(tid_in)
-        for tid in transfer_ids:
-            supabase.table("transactions").update({"is_transfer": True}).eq("id", tid).eq("user_id", user_id).execute()
+            supabase.table("transactions").update(
+                {"is_transfer": True, "linked_transaction_id": tid_in, "category": "Self-Transfer"}
+            ).eq("id", tid_out).eq("user_id", user_id).execute()
+            supabase.table("transactions").update(
+                {"is_transfer": True, "linked_transaction_id": tid_out, "category": "Self-Transfer"}
+            ).eq("id", tid_in).eq("user_id", user_id).execute()
 
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
         db_transactions = getattr(tx_resp, "data", None) or []
@@ -1293,7 +1899,6 @@ async def save_statements(
         processing_summary = {
             "transactions_categorized": cat_count,
             "flagged_for_review": flagged_count,
-            "duplicates_skipped": duplicates_skipped,
             "transfers_detected": len(transfer_pairs),
         }
         return {
@@ -1329,6 +1934,8 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
 
         stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
         statements = stmt_resp.data or []
+        accounts_resp = supabase.table("accounts").select("id, account_type").eq("user_id", user_id).execute()
+        accounts = accounts_resp.data or []
 
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
         db_transactions = tx_resp.data or []
@@ -1340,9 +1947,63 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
+        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        balance_rows = getattr(bal_resp, "data", None) or []
+        _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
         analysis = analyze_transactions(all_transactions)
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/statements/bulk-delete")
+async def bulk_delete_statements(body: dict = Body(...), authorization: str = Header(None, alias="Authorization")):
+    """Delete multiple statements by IDs (cascades to transactions). Cleans up orphaned accounts. Recomputes and returns updated analysis."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    statement_ids = body.get("statement_ids", [])
+    if not statement_ids or not isinstance(statement_ids, list):
+        raise HTTPException(status_code=400, detail="statement_ids must be a non-empty list")
+    try:
+        affected_account_ids = set()
+        for sid in statement_ids:
+            get_resp = supabase.table("user_statements").select("account_id").eq("id", sid).eq("user_id", user_id).execute()
+            if get_resp.data and len(get_resp.data) > 0:
+                acc_id = get_resp.data[0].get("account_id")
+                if acc_id:
+                    affected_account_ids.add(acc_id)
+                supabase.table("user_statements").delete().eq("id", sid).eq("user_id", user_id).execute()
+
+        for account_id in affected_account_ids:
+            remaining = supabase.table("user_statements").select("id").eq("account_id", account_id).execute()
+            if not (remaining.data and len(remaining.data) > 0):
+                supabase.table("accounts").delete().eq("id", account_id).eq("user_id", user_id).execute()
+
+        stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
+        statements = stmt_resp.data or []
+        accounts_resp = supabase.table("accounts").select("id, account_type").eq("user_id", user_id).execute()
+        accounts = accounts_resp.data or []
+
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = tx_resp.data or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        tx_by_stmt = defaultdict(list)
+        for t in db_transactions:
+            sid = t.get("statement_id")
+            if sid:
+                tx_by_stmt[sid].append(_db_txn_to_analysis(t))
+        for s in statements:
+            s["transactions"] = tx_by_stmt.get(s["id"], [])
+        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        balance_rows = getattr(bal_resp, "data", None) or []
+        _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
+
+        analysis = analyze_transactions(all_transactions)
+        return {"statements": statements, "transactions": all_transactions, "analysis": analysis, "deleted_count": len(statement_ids)}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1356,6 +2017,8 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
     try:
         stmt_resp = supabase.table("user_statements").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
         statements = stmt_resp.data or []
+        accounts_resp = supabase.table("accounts").select("id, account_type").eq("user_id", user_id).execute()
+        accounts = accounts_resp.data or []
 
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
         db_transactions = tx_resp.data or []
@@ -1367,9 +2030,60 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
+        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        balance_rows = getattr(bal_resp, "data", None) or []
+        _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
         analysis = analyze_transactions(all_transactions)
         return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/detect-internal-transfers")
+async def detect_internal_transfers(authorization: str = Header(None, alias="Authorization")):
+    """
+    Recompute internal transfer detection for the authenticated user.
+    - Clears previous is_transfer + linked_transaction_id
+    - Runs _detect_internal_transfers over all user transactions
+    - Persists 1:1 links on both sides
+    Returns updated transactions + analysis + summary counts.
+    """
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    try:
+        # Clear all previous transfer marks/links
+        supabase.table("transactions").update(
+            {"is_transfer": False, "linked_transaction_id": None}
+        ).eq("user_id", user_id).execute()
+
+        # Re-detect pairs based on current ledger
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
+        db_transactions = getattr(tx_resp, "data", None) or []
+        transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
+
+        for tid_out, tid_in in transfer_pairs:
+            supabase.table("transactions").update(
+                {"is_transfer": True, "linked_transaction_id": tid_in, "category": "Self-Transfer"}
+            ).eq("id", tid_out).eq("user_id", user_id).execute()
+            supabase.table("transactions").update(
+                {"is_transfer": True, "linked_transaction_id": tid_out, "category": "Self-Transfer"}
+            ).eq("id", tid_in).eq("user_id", user_id).execute()
+
+        # Return updated transactions + recomputed analysis
+        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
+        db_transactions = getattr(tx_resp, "data", None) or []
+        all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
+        analysis = analyze_transactions(all_transactions)
+        return {
+            "transactions": all_transactions,
+            "analysis": analysis,
+            "processing_summary": {
+                "transfers_detected": len(transfer_pairs),
+                "transactions_marked_transfer": len(transfer_pairs) * 2,
+            },
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

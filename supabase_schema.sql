@@ -96,6 +96,7 @@ create table if not exists public.transactions (
   clean_merchant text, -- Normalized name for Personal Inflation logic
   amount decimal(12,2) not null,
   category text,
+  occurrence_index integer not null default 1,
   is_duplicate boolean default false,
   is_transfer boolean default false, -- For Sankey/Internal transfer filter
   is_fixed_cost boolean default false, -- For Fixed vs Variable split
@@ -108,7 +109,11 @@ alter table public.transactions
 drop constraint if exists unique_transaction_sig;
 
 alter table public.transactions
-add constraint unique_transaction_sig unique (account_id, date, amount, description);
+drop constraint if exists unique_transaction_occurrence;
+
+alter table public.transactions
+add constraint unique_transaction_occurrence
+unique (account_id, date, amount, description, occurrence_index);
 
 -- ==========================================
 -- 5. ROW LEVEL SECURITY (RLS)
