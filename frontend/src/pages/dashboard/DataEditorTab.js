@@ -621,13 +621,15 @@ export default function DataEditorTab() {
     return { applicable, balancesReconciled, allReviewed, fullyValidated };
   };
 
-  const displayTransactionsRaw =
+  // Memoize derived transactions so downstream `useMemo` dependencies remain stable under CI/ESLint.
+  const displayTransactionsRaw = React.useMemo(() => (
     contextTx?.length > 0
       ? contextTx
           .map((t, i) => normalizeTransaction(t, i))
           .filter(Boolean)
           .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      : [];
+      : []
+  ), [contextTx]);
   const afterStatementFilter = selectedStatementIds.size > 0
     ? displayTransactionsRaw.filter((tx) => tx.statement_id && selectedStatementIds.has(tx.statement_id))
     : displayTransactionsRaw;
