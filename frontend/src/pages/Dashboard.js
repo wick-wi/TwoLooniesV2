@@ -6,11 +6,12 @@ import { useAuth } from '../context/AuthContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import { useUpload } from '../context/UploadContext';
 import UploadStatementModal from '../components/UploadStatementModal';
-import { formatStatementUploadError } from '../utils/statementUploadErrors';
+import { formatApiConnectionError, formatStatementUploadError } from '../utils/statementUploadErrors';
 import { FileText, Trash2, RefreshCw, Plus, Landmark, Scale } from 'lucide-react';
 import './Dashboard.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
+const API_TIMEOUT_MS = 45_000;
 
 function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
   const { open, ready } = usePlaidLink({ token: linkToken, onSuccess });
@@ -50,20 +51,43 @@ export default function Dashboard() {
   const [rerunning, setRerunning] = useState(false);
   const [linkToken, setLinkToken] = useState(null);
   const [linkTokenError, setLinkTokenError] = useState(null);
+  const [linkTokenLoading, setLinkTokenLoading] = useState(false);
+  const [linkTokenReady, setLinkTokenReady] = useState(false);
 
   const token = getAccessToken?.();
 
   const fetchLinkToken = useCallback(async () => {
+    if (!token) {
+      setLinkToken(null);
+      setLinkTokenLoading(false);
+      setLinkTokenError(null);
+      setLinkTokenReady(true);
+      return;
+    }
     setLinkTokenError(null);
+    setLinkTokenLoading(true);
     try {
-      const res = await axios.post(`${API_BASE}/api/create_link_token`);
+      const res = await axios.post(`${API_BASE}/api/create_link_token`, null, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: API_TIMEOUT_MS,
+      });
       setLinkToken(res.data.link_token);
     } catch (err) {
       console.error('Link token error:', err);
-      const msg = err.response?.data?.error || err.response?.data?.detail || err.message || 'Could not connect to bank linking service.';
+      const hint = formatApiConnectionError(err, 'Bank link');
+      const msg =
+        hint ||
+        err.response?.data?.error ||
+        err.response?.data?.detail ||
+        err.message ||
+        'Could not connect to bank linking service.';
       setLinkTokenError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      setLinkToken(null);
+    } finally {
+      setLinkTokenLoading(false);
+      setLinkTokenReady(true);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchLinkToken();
@@ -72,20 +96,26 @@ export default function Dashboard() {
   const onPlaidSuccess = useCallback(async (public_token) => {
     if (!token) return;
     try {
-      const exchangeRes = await axios.post(`${API_BASE}/api/exchange_public_token`, { public_token });
-      const access_token = exchangeRes.data?.access_token;
+      const exchangeRes = await axios.post(
+        `${API_BASE}/api/exchange_public_token`,
+        { public_token },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
       const item_id = exchangeRes.data?.item_id;
-      if (!access_token) throw new Error('No access token returned');
-      const txRes = await axios.post(`${API_BASE}/api/transactions`, { access_token });
+      if (!item_id) throw new Error('Bank link did not return an item id.');
+      const txRes = await axios.post(
+        `${API_BASE}/api/transactions`,
+        { item_id },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
       if (txRes.data.error) throw new Error(txRes.data.error);
-      const analysisData = { ...txRes.data, access_token, item_id };
+      const analysisData = { ...txRes.data, item_id };
       setAnalysisData(analysisData);
       await axios.post(
         `${API_BASE}/api/save_analysis`,
         {
           source: 'plaid',
           summary: txRes.data.analysis || {},
-          access_token,
           item_id: item_id || 'unknown',
         },
         { headers: { Authorization: `Bearer ${token}` } }
@@ -93,22 +123,38 @@ export default function Dashboard() {
       navigate('/analysis');
     } catch (err) {
       console.error('Plaid flow error:', err);
-      setError(err.response?.data?.error || err.message || 'Something went wrong.');
+      const d = err.response?.data?.detail;
+      setError(
+        (typeof d === 'string' ? d : null) ||
+          err.response?.data?.error ||
+          err.message ||
+          'Something went wrong.'
+      );
     }
   }, [token, setAnalysisData, navigate]);
 
   const fetchUserData = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await axios.get(`${API_BASE}/api/user_data`, {
         headers: { Authorization: `Bearer ${token}` },
+        timeout: API_TIMEOUT_MS,
       });
       setStatements(res.data.statements || []);
       setAnalysisData(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load data');
+      const hint = formatApiConnectionError(err, 'Loading data');
+      setError(
+        hint ||
+          err.response?.data?.detail ||
+          err.message ||
+          'Failed to load data'
+      );
       setStatements([]);
       clearAnalysis?.();
     } finally {
@@ -123,7 +169,7 @@ export default function Dashboard() {
       return;
     }
     fetchUserData();
-  }, [isAuthenticated, authLoading, fetchUserData, navigate]);
+  }, [isAuthenticated, authLoading, token, fetchUserData, navigate]);
 
   const handleDeleteStatement = async (id) => {
     if (!token) return;
@@ -249,12 +295,16 @@ export default function Dashboard() {
                     <Landmark size={18} /> Connect Bank
                   </PlaidConnectButton>
                 ) : linkTokenError ? (
-                  <button onClick={fetchLinkToken} className="btn-secondary-dash">
+                  <button type="button" onClick={fetchLinkToken} className="btn-secondary-dash">
                     Retry Connect Bank
                   </button>
-                ) : (
-                  <button disabled className="btn-secondary-dash opacity-60">
+                ) : !linkTokenReady || linkTokenLoading ? (
+                  <button type="button" disabled className="btn-secondary-dash opacity-60">
                     Loading...
+                  </button>
+                ) : (
+                  <button type="button" disabled className="btn-secondary-dash opacity-60">
+                    Bank link unavailable
                   </button>
                 )}
                 <button
@@ -289,12 +339,16 @@ export default function Dashboard() {
                       <Landmark size={18} /> Connect Bank Account
                     </PlaidConnectButton>
                   ) : linkTokenError ? (
-                    <button onClick={fetchLinkToken} className="btn-secondary-dash">
+                    <button type="button" onClick={fetchLinkToken} className="btn-secondary-dash">
                       Retry Connect Bank
                     </button>
-                  ) : (
-                    <button disabled className="btn-secondary-dash opacity-60">
+                  ) : !linkTokenReady || linkTokenLoading ? (
+                    <button type="button" disabled className="btn-secondary-dash opacity-60">
                       Loading Plaid...
+                    </button>
+                  ) : (
+                    <button type="button" disabled className="btn-secondary-dash opacity-60">
+                      Bank link unavailable
                     </button>
                   )}
                   <button onClick={() => setShowUploadModal(true)} className="btn-primary-dash">

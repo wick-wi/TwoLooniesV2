@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
 import axios from 'axios';
@@ -52,38 +52,68 @@ export default function Landing() {
     if (location.state?.showForgotPassword) setShowForgotPasswordModal(true);
   }, [location.state?.showLogin, location.state?.showSignUp, location.state?.showForgotPassword]);
 
-  const fetchLinkToken = async () => {
+  const sessionToken = getAccessToken?.() ?? null;
+
+  const fetchLinkToken = useCallback(async () => {
     setLinkTokenError(null);
     setLinkTokenLoading(true);
+    setLinkToken(null);
+    if (!sessionToken) {
+      setLinkTokenLoading(false);
+      return;
+    }
     try {
-      const res = await axios.post(`${API_BASE}/api/create_link_token`);
+      const res = await axios.post(`${API_BASE}/api/create_link_token`, null, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
       setLinkToken(res.data.link_token);
     } catch (err) {
       console.error('Link token error:', err);
-      const msg = err.response?.data?.error || err.response?.data?.detail || err.message || 'Could not connect to bank linking service.';
+      const msg =
+        err.response?.data?.error ||
+        err.response?.data?.detail ||
+        err.message ||
+        'Could not connect to bank linking service.';
       setLinkTokenError(typeof msg === 'string' ? msg : JSON.stringify(msg));
     } finally {
       setLinkTokenLoading(false);
     }
-  };
+  }, [sessionToken]);
 
   useEffect(() => {
     fetchLinkToken();
-  }, []);
+  }, [fetchLinkToken]);
 
   const onPlaidSuccess = async (public_token) => {
+    if (!sessionToken) {
+      alert('Please log in to connect your bank account.');
+      return;
+    }
     try {
-      const exchangeRes = await axios.post(`${API_BASE}/api/exchange_public_token`, { public_token });
-      const access_token = exchangeRes.data?.access_token;
+      const exchangeRes = await axios.post(
+        `${API_BASE}/api/exchange_public_token`,
+        { public_token },
+        { headers: { Authorization: `Bearer ${sessionToken}` } }
+      );
       const item_id = exchangeRes.data?.item_id;
-      if (!access_token) throw new Error('No access token returned');
-      const txRes = await axios.post(`${API_BASE}/api/transactions`, { access_token });
+      if (!item_id) throw new Error('Bank link did not return an item id.');
+      const txRes = await axios.post(
+        `${API_BASE}/api/transactions`,
+        { item_id },
+        { headers: { Authorization: `Bearer ${sessionToken}` } }
+      );
       if (txRes.data.error) throw new Error(txRes.data.error);
-      setAnalysisData({ ...txRes.data, access_token, item_id });
+      setAnalysisData({ ...txRes.data, item_id });
       navigate('/analysis');
     } catch (err) {
       console.error('Plaid flow error:', err);
-      alert(err.response?.data?.error || err.message || 'Something went wrong.');
+      const d = err.response?.data?.detail;
+      alert(
+        (typeof d === 'string' ? d : null) ||
+          err.response?.data?.error ||
+          err.message ||
+          'Something went wrong.'
+      );
     }
   };
 
@@ -94,7 +124,7 @@ export default function Landing() {
     navigate('/analysis');
   };
 
-  const landingUploadToken = getAccessToken?.() ?? null;
+  const landingUploadToken = sessionToken;
 
   const uploadErrorMessage = (err) => formatStatementUploadError(err);
 
@@ -174,10 +204,19 @@ export default function Landing() {
         <section className="w-full max-w-xl">
           <div className="relative rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-8 sm:p-10">
             <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center items-stretch sm:items-center">
-              {linkToken ? (
+              {!sessionToken ? (
+                <button
+                  type="button"
+                  onClick={() => setShowLoginModal(true)}
+                  className="w-full sm:w-auto px-8 py-3.5 rounded-lg font-semibold text-black bg-gradient-to-r from-amber-400 to-yellow-600 shadow-[0_0_20px_rgba(251,191,36,0.4)] hover:shadow-[0_0_28px_rgba(251,191,36,0.5)] hover:from-amber-300 hover:to-yellow-500 transition-all duration-300 ease-out"
+                >
+                  Log in to connect bank
+                </button>
+              ) : linkToken ? (
                 <PlaidButton token={linkToken} onSuccess={onPlaidSuccess} />
               ) : linkTokenError ? (
                 <button
+                  type="button"
                   onClick={fetchLinkToken}
                   className="w-full sm:w-auto px-8 py-3.5 rounded-lg font-semibold text-black bg-gradient-to-r from-amber-400 to-yellow-600 shadow-[0_0_20px_rgba(251,191,36,0.4)] hover:shadow-[0_0_28px_rgba(251,191,36,0.5)] hover:from-amber-300 hover:to-yellow-500 transition-all duration-300 ease-out"
                 >
@@ -185,6 +224,7 @@ export default function Landing() {
                 </button>
               ) : (
                 <button
+                  type="button"
                   disabled
                   className="w-full sm:w-auto px-8 py-3.5 rounded-lg font-semibold text-black bg-gradient-to-r from-amber-400 to-yellow-600 opacity-60 cursor-not-allowed"
                 >
@@ -198,7 +238,7 @@ export default function Landing() {
                 Upload PDF Statement
               </button>
             </div>
-            {linkTokenError && (
+            {sessionToken && linkTokenError && (
               <p className="mt-3 text-center text-amber-400/90 text-sm" role="alert">
                 {linkTokenError}
               </p>
@@ -209,7 +249,7 @@ export default function Landing() {
               </p>
             )}
             <p className="mt-5 text-center text-slate-500 text-sm">
-              🔒 No account required to start. Your data stays private.
+              PDF statements work without an account; connecting a bank uses a secure login. Your data stays private.
             </p>
           </div>
         </section>

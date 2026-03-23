@@ -3,13 +3,14 @@ import json
 import logging
 import os
 import re
+import secrets
 import tempfile
 import uuid
 import asyncio
 from uuid import uuid4
 from fastapi import BackgroundTasks
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from fastapi.encoders import jsonable_encoder
 
@@ -57,16 +58,20 @@ app = FastAPI()
 
 from .upload_job_redis import job_redis_get, job_redis_setex
 
+STATEMENT_JOB_POLL_SECRET_HEADER = "X-Statement-Job-Secret"
+
 # Job state: Upstash REST if UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN; else REDIS_URL (e.g. local Docker).
 # The Job Management Helpers
-async def create_job(total_files: int) -> str:
+async def create_job(total_files: int) -> tuple[str, str]:
     job_id = str(uuid4())
+    poll_secret = secrets.token_urlsafe(32)
     job_data = {
         "status": "queued",
         "message": "Preparing your files...",
         "current_file": 0,
         "total_files": total_files,
-        "result": None
+        "result": None,
+        "poll_secret": poll_secret,
     }
     # Save to Redis as a JSON string.
     # 'setex' sets an expiration time of 3600 seconds (1 hour).
@@ -76,7 +81,33 @@ async def create_job(total_files: int) -> str:
     except Exception as e:
         logger.exception("Failed to create Redis job %s: %s", job_id, e)
         raise HTTPException(status_code=503, detail="Upload queue is unavailable right now. Please try again.")
-    return job_id
+    return job_id, poll_secret
+
+
+def _statement_job_access_granted(
+    job: dict | None,
+    authorization: str | None,
+    poll_secret_header: str | None,
+) -> bool:
+    """Allow poll if X-Statement-Job-Secret matches, or Bearer user matches job user_id_for_worker."""
+    if not job:
+        return False
+    expected = job.get("poll_secret")
+    if (
+        poll_secret_header
+        and expected
+        and len(poll_secret_header) == len(expected)
+        and secrets.compare_digest(poll_secret_header, expected)
+    ):
+        return True
+    owner = job.get("user_id_for_worker")
+    if owner and authorization:
+        try:
+            uid = _get_user_from_token(authorization)
+            return uid == owner
+        except HTTPException:
+            return False
+    return False
 
 async def get_job(job_id: str) -> dict:
     try:
@@ -330,7 +361,7 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                 })
 
             except Exception as e:
-                raise Exception(f"Failed to parse '{fname}': {str(e)}")
+                raise RuntimeError(f"Failed to parse '{fname}': {e}") from e
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
@@ -432,8 +463,9 @@ async def upload_statement(
         use_qstash_dispatch,
     )
 
-    # 1. Create the job in Redis
-    job_id = await create_job(total_files=len(file_data))
+    # 1. Create the job in Redis (poll_secret stored server-side; returned once to the client).
+    job_id, poll_secret = await create_job(total_files=len(file_data))
+    await update_job(job_id, user_id_for_worker=user_id)
 
     # 2. Local: in-process background task. Vercel/production: QStash + staged PDFs in Supabase.
     if use_qstash_dispatch():
@@ -446,11 +478,7 @@ async def upload_statement(
                 status_code=503,
                 detail="Could not prepare files for processing. Please try again.",
             )
-        await update_job(
-            job_id,
-            pending_file_specs=specs,
-            user_id_for_worker=user_id,
-        )
+        await update_job(job_id, pending_file_specs=specs)
         try:
             await publish_statement_job_qstash(job_id)
         except Exception:
@@ -465,16 +493,20 @@ async def upload_statement(
         background_tasks.add_task(process_pdf_internal, job_id, file_data, user_id)
 
     # 3. Return the ID immediately to React!
-    out: dict = {"job_id": job_id}
+    out: dict = {"job_id": job_id, "poll_secret": poll_secret}
     if skipped_duplicates:
         out["skipped_duplicates"] = skipped_duplicates
     return out
 
 
 @app.get("/api/upload_statement_status/{job_id}")
-async def upload_statement_status(job_id: str):
+async def upload_statement_status(
+    job_id: str,
+    authorization: str = Header(None, alias="Authorization"),
+    x_statement_job_secret: str | None = Header(None, alias=STATEMENT_JOB_POLL_SECRET_HEADER),
+):
     job = await get_job(job_id)
-    if not job:
+    if not job or not _statement_job_access_granted(job, authorization, x_statement_job_secret):
         raise HTTPException(status_code=404, detail="Upload session expired or not found.")
     return {
         "status": job.get("status", "queued"),
@@ -485,9 +517,13 @@ async def upload_statement_status(job_id: str):
 
 
 @app.get("/api/upload_statement_result/{job_id}")
-async def upload_statement_result(job_id: str):
+async def upload_statement_result(
+    job_id: str,
+    authorization: str = Header(None, alias="Authorization"),
+    x_statement_job_secret: str | None = Header(None, alias=STATEMENT_JOB_POLL_SECRET_HEADER),
+):
     job = await get_job(job_id)
-    if not job:
+    if not job or not _statement_job_access_granted(job, authorization, x_statement_job_secret):
         raise HTTPException(status_code=404, detail="Upload session expired or not found.")
 
     status = job.get("status")
@@ -627,9 +663,15 @@ if _env_local_gemini_model_pass2:
 
 from .utils.gemini_model import get_configured_gemini_model_raw
 
-print(f"STATEMENT_PARSER in use (at startup): {os.environ.get('STATEMENT_PARSER', '(unset)')!r}")
-print(f"GEMINI_MODEL_PASS1 in use (at startup): {get_configured_gemini_model_raw()!r}")
-print(f"GEMINI_MODEL_PASS2 in use (at startup): {os.environ.get('GEMINI_MODEL_PASS2', '(unset)')!r}")
+logger.info(
+    "STATEMENT_PARSER in use (at startup): %r",
+    os.environ.get("STATEMENT_PARSER", "(unset)"),
+)
+logger.info("GEMINI_MODEL_PASS1 in use (at startup): %r", get_configured_gemini_model_raw())
+logger.info(
+    "GEMINI_MODEL_PASS2 in use (at startup): %r",
+    os.environ.get("GEMINI_MODEL_PASS2", "(unset)"),
+)
 
 import plaid
 from plaid.api import plaid_api
@@ -661,8 +703,6 @@ try:
 except ImportError:
     supabase = None
 
-load_dotenv()
-
 # CORS: localhost for dev, Vercel for deployed frontend (same-origin when both on Vercel)
 _cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 for env_var in ("VERCEL_URL", "VERCEL_BRANCH_URL"):
@@ -680,16 +720,21 @@ app.add_middleware(
 PLAID_CLIENT_ID = os.getenv('PLAID_CLIENT_ID')
 PLAID_SECRET = os.getenv('PLAID_SECRET')
 
-# This will stop the code and tell you EXACTLY if the keys are missing
-if not PLAID_CLIENT_ID or not PLAID_SECRET:
-    print("❌ ERROR: Plaid keys not found in .env file!")
-    print(f"DEBUG -> Client ID: {PLAID_CLIENT_ID}")
-    print(f"DEBUG -> Secret: {PLAID_SECRET}")
+_plaid_env = (os.getenv("PLAID_ENV") or "sandbox").strip().lower()
+if _plaid_env in ("production", "prod"):
+    _plaid_host = plaid.Environment.Production
+elif _plaid_env in ("development", "dev"):
+    _plaid_host = plaid.Environment.Development
 else:
-    print("✅ Plaid keys loaded successfully.")
+    _plaid_host = plaid.Environment.Sandbox
+
+if not PLAID_CLIENT_ID or not PLAID_SECRET:
+    logger.error("Plaid keys not found (PLAID_CLIENT_ID / PLAID_SECRET)")
+else:
+    logger.info("Plaid keys loaded (PLAID_ENV=%r -> host=%s)", _plaid_env, _plaid_host)
 
 configuration = plaid.Configuration(
-    host=plaid.Environment.Sandbox,
+    host=_plaid_host,
     api_key={
         'clientId': PLAID_CLIENT_ID,
         'secret': PLAID_SECRET,
@@ -699,46 +744,105 @@ configuration = plaid.Configuration(
 api_client = plaid.ApiClient(configuration)
 client = plaid_api.PlaidApi(api_client)
 
+# Outbound Plaid HTTPS timeouts (connect, read) — avoids hanging the server if Plaid is unreachable.
+PLAID_HTTP_TIMEOUT = (5.0, 45.0)
+
+
+def _upsert_plaid_item_for_user(user_id: str, item_id: str, access_token: str) -> None:
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+    row = {
+        "user_id": user_id,
+        "item_id": item_id,
+        "access_token": access_token,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    supabase.table("plaid_items").upsert(row, on_conflict="user_id,item_id").execute()
+
+
+def _get_plaid_access_token_for_item(user_id: str, item_id: str) -> str | None:
+    if not supabase:
+        return None
+    resp = (
+        supabase.table("plaid_items")
+        .select("access_token")
+        .eq("user_id", user_id)
+        .eq("item_id", item_id)
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(resp, "data", None) or []
+    if not rows:
+        return None
+    tok = rows[0].get("access_token")
+    return str(tok) if tok else None
+
 
 @app.post("/api/create_link_token")
-async def create_link_token():
+async def create_link_token(authorization: str = Header(None, alias="Authorization")):
+    user_id = _get_user_from_token(authorization)
     try:
         request = LinkTokenCreateRequest(
             products=[Products('transactions')],
             country_codes=[CountryCode('CA')],  # Specifically for Canada
             language='en',
-            user=LinkTokenCreateRequestUser(client_user_id='unique-user-id-123'),
+            user=LinkTokenCreateRequestUser(client_user_id=str(user_id)),
             client_name="Canada Wealth Dashboard"
         )
-        response = client.link_token_create(request)
+
+        def _call_plaid():
+            return client.link_token_create(request, _request_timeout=PLAID_HTTP_TIMEOUT)
+
+        response = await asyncio.to_thread(_call_plaid)
         return response.to_dict()
     except plaid.ApiException as e:
-        logger.error(f"Plaid link token error: {e}")
+        logger.error("Plaid link token error: %s", e)
         detail = str(e.body) if getattr(e, 'body', None) else str(e)
         raise HTTPException(status_code=502, detail=detail)
     except Exception as e:
-        logger.error(f"Link token error: {e}")
+        logger.error("Link token error: %s", e)
+        err_s = str(e).lower()
+        if "timeout" in err_s or "timed out" in err_s:
+            raise HTTPException(
+                status_code=504,
+                detail="Plaid did not respond in time. Check network, firewall, and PLAID_ENV / Plaid credentials.",
+            )
         raise HTTPException(status_code=500, detail="Failed to create bank link. Ensure the backend is configured with valid Plaid credentials.")
 
 
 @app.post("/api/exchange_public_token")
-async def exchange_public_token(payload: dict = Body(...)):
+async def exchange_public_token(
+    payload: dict = Body(...),
+    authorization: str = Header(None, alias="Authorization"),
+):
+    user_id = _get_user_from_token(authorization)
     public_token = payload.get("public_token")
     if not public_token:
-        return {"error": "No public token provided"}
+        raise HTTPException(status_code=400, detail="No public token provided")
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
 
     try:
-        exchange_request = ItemPublicTokenExchangeRequest(
-            public_token=public_token
-        )
-        exchange_response = client.item_public_token_exchange(exchange_request)
-        access_token = exchange_response['access_token']
-        item_id = exchange_response['item_id']
-        print(f"✅ Success! Access Token: {access_token}")
-        return {"status": "success", "item_id": item_id, "access_token": access_token}
+        exchange_request = ItemPublicTokenExchangeRequest(public_token=public_token)
+
+        def _exchange():
+            return client.item_public_token_exchange(exchange_request, _request_timeout=PLAID_HTTP_TIMEOUT)
+
+        exchange_response = await asyncio.to_thread(_exchange)
+        raw = exchange_response.to_dict() if hasattr(exchange_response, "to_dict") else dict(exchange_response)
+        access_token = raw.get("access_token")
+        item_id = raw.get("item_id")
+        if not access_token or not item_id:
+            logger.error("Plaid exchange returned missing access_token or item_id")
+            raise HTTPException(status_code=502, detail="Invalid response from bank linking service.")
+        _upsert_plaid_item_for_user(user_id, str(item_id), str(access_token))
+        logger.info("Plaid item linked for user_id=%s item_id=%s", user_id, item_id)
+        return {"status": "success", "item_id": item_id}
+    except HTTPException:
+        raise
     except plaid.ApiException as e:
-        print(f"❌ Plaid Error: {e}")
-        return {"error": str(e)}
+        logger.warning("Plaid exchange error: %s", e)
+        raise HTTPException(status_code=502, detail=str(e.body) if getattr(e, "body", None) else str(e))
 
 
 MAX_STATEMENTS = 12
@@ -1423,11 +1527,20 @@ def _plaid_to_common(txn: dict) -> dict:
 
 
 @app.post("/api/transactions")
-async def get_plaid_transactions(payload: dict = Body(...)):
-    """Fetch transactions from Plaid using access_token. Returns normalized transactions + analysis."""
+async def get_plaid_transactions(
+    payload: dict = Body(...),
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Fetch transactions from Plaid. Prefer item_id + Bearer (server looks up access_token); legacy body access_token still supported."""
     access_token = payload.get("access_token")
+    item_id = payload.get("item_id")
+    if item_id and not access_token:
+        user_id = _get_user_from_token(authorization)
+        access_token = _get_plaid_access_token_for_item(user_id, str(item_id))
+        if not access_token:
+            return {"error": "Unknown item_id or bank link not found for this account."}
     if not access_token:
-        return {"error": "access_token required"}
+        return {"error": "Provide item_id with Authorization Bearer token, or access_token (legacy)."}
     end = date.today()
     start = end - timedelta(days=90)
     try:
@@ -1436,7 +1549,11 @@ async def get_plaid_transactions(payload: dict = Body(...)):
             start_date=start,
             end_date=end,
         )
-        resp = client.transactions_get(req)
+
+        def _tx_get():
+            return client.transactions_get(req, _request_timeout=PLAID_HTTP_TIMEOUT)
+
+        resp = await asyncio.to_thread(_tx_get)
         raw = resp.to_dict() if hasattr(resp, "to_dict") else dict(resp)
         plaid_txns = raw.get("transactions", [])
         transactions = [_plaid_to_common(t) for t in plaid_txns]
@@ -2143,8 +2260,9 @@ def _get_user_from_token(authorization: str = None):
                 options={"verify_exp": True},
             )
             return payload.get("sub")
-    except Exception:
-        pass
+    except Exception as e:
+        if jwks_url:
+            logger.debug("JWKS JWT verification failed (trying HS256 if configured): %s", e)
 
     secret = os.getenv("SUPABASE_JWT_SECRET")
     if secret:
@@ -2241,7 +2359,8 @@ async def get_categories():
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_categories failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load categories.")
 
 
 @app.get("/api/exchange_rates")
@@ -2254,7 +2373,8 @@ async def get_exchange_rates():
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_exchange_rates failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load exchange rates.")
 
 
 @app.get("/api/tags")
@@ -2676,7 +2796,8 @@ async def get_user_data(authorization: str = Header(None, alias="Authorization")
             "source": "pdf",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_user_data failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load user data.")
 
 
 @app.get("/api/accounts_with_balances")
@@ -2695,7 +2816,8 @@ async def get_accounts_with_balances(authorization: str = Header(None, alias="Au
             a["balances"] = latest_by_account.get(_normalize_uuid(a.get("id")), [])
         return {"accounts": accounts}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("get_accounts_with_balances failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load accounts.")
 
 
 def _get_latest_holdings_snapshot(user_id: str, account_id: str, currency: str) -> tuple[list[dict], str | None]:

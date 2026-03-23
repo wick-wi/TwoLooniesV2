@@ -1,4 +1,19 @@
 /**
+ * Axios timeout / no response (API down, wrong host, or macOS localhost → ::1 hang).
+ * Returns a string to show the user, or null if a normal HTTP error body should be used.
+ */
+export function formatApiConnectionError(err, contextLabel = 'Request') {
+  const m = (err?.message || '').toLowerCase();
+  if (err?.code === 'ECONNABORTED' || m.includes('timeout')) {
+    return `${contextLabel} timed out. Start the API (e.g. uvicorn on port 8000) and set REACT_APP_API_URL=http://127.0.0.1:8000 in frontend/.env.local — on macOS, "localhost" can hang trying IPv6.`;
+  }
+  if (!err?.response) {
+    return `${contextLabel}: cannot reach server (${err?.message || 'network error'}). Check the API is running and REACT_APP_API_URL matches it.`;
+  }
+  return null;
+}
+
+/**
  * Human-readable message for /api/upload_statement failures (including 409 duplicate payloads).
  */
 export function formatStatementUploadError(err) {

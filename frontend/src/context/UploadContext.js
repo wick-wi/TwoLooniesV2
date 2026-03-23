@@ -3,27 +3,37 @@ import './UploadContext.css';
 
 const UploadContext = createContext(null);
 
+const API_BASE = (process.env.REACT_APP_API_URL ?? '').replace(/\/$/, '');
+const JOB_ID_KEY = 'twoLoonies_jobId';
+const JOB_SECRET_KEY = 'twoLoonies_jobPollSecret';
+const POLL_HEADER = 'X-Statement-Job-Secret';
+
+function apiUrl(path) {
+  if (!path.startsWith('/')) return `${API_BASE}/${path}`;
+  return API_BASE ? `${API_BASE}${path}` : path;
+}
+
 export function UploadProvider({ children }) {
-  // 1. Initialize jobId from localStorage in case of a page refresh
-  const [jobId, setJobId] = useState(() => localStorage.getItem('twoLoonies_jobId') || null);
-  
-  // 2. Richer state to power your dynamic progress pill
+  const [jobId, setJobId] = useState(() => sessionStorage.getItem(JOB_ID_KEY) || null);
+
   const [uploadState, setUploadState] = useState({
-    active: !!jobId, // If we found an ID on load, we are active
+    active: !!sessionStorage.getItem(JOB_ID_KEY),
     message: 'Restoring upload session...',
     current: 0,
     total: 0,
-    isError: false
+    isError: false,
   });
 
-  // Use a ref to hold callbacks so the polling loop can access them 
-  // even if the component that started the upload unmounts.
   const callbacksRef = useRef({ onSuccess: null, onError: null });
   const skippedDuplicatesRef = useRef([]);
 
+  const clearJobSession = () => {
+    sessionStorage.removeItem(JOB_ID_KEY);
+    sessionStorage.removeItem(JOB_SECRET_KEY);
+  };
+
   const startUpload = async (uploadPromise, { onSuccess, onError } = {}) => {
-    // 1. Wipe any old jobs from memory before we start
-    localStorage.removeItem('twoLoonies_jobId');
+    clearJobSession();
     setJobId(null);
     skippedDuplicatesRef.current = [];
 
@@ -38,15 +48,17 @@ export function UploadProvider({ children }) {
         skippedDuplicatesRef.current = skipped;
       }
 
-      // 2. The Bulletproof ID check (Handles both Fetch and Axios!)
       const actualJobId = response?.job_id || response?.data?.job_id;
+      const pollSecret = response?.poll_secret ?? response?.data?.poll_secret;
 
       if (actualJobId) {
-        setJobId(actualJobId); // This triggers the polling loop with the NEW id
+        if (pollSecret) {
+          sessionStorage.setItem(JOB_SECRET_KEY, pollSecret);
+        }
+        setJobId(actualJobId);
       } else if (response && (response.error || response?.data?.error)) {
         throw new Error(response.error || response.data.error);
       } else {
-        // Fallback
         onSuccess?.(response);
         setUploadState({ active: false, isError: false });
       }
@@ -56,52 +68,65 @@ export function UploadProvider({ children }) {
   };
 
   const handleError = (err, fallbackMessage) => {
-    console.error("Upload Error:", err);
+    console.error('Upload Error:', err);
     callbacksRef.current.onError?.(err);
-    setUploadState(prev => ({ ...prev, active: true, isError: true, message: err.message || fallbackMessage }));
-    
-    // Auto-hide the error pill after 4 seconds
+    setUploadState((prev) => ({
+      ...prev,
+      active: true,
+      isError: true,
+      message: err.message || fallbackMessage,
+    }));
+
     setTimeout(() => {
       setJobId(null);
-      setUploadState(prev => ({ ...prev, active: false }));
+      clearJobSession();
+      setUploadState((prev) => ({ ...prev, active: false }));
     }, 4000);
   };
 
-  // 3. The Polling Loop
   useEffect(() => {
     if (!jobId) {
-      localStorage.removeItem('twoLoonies_jobId');
+      clearJobSession();
       return;
     }
 
-    // Save to local storage to survive refreshes
-    localStorage.setItem('twoLoonies_jobId', jobId);
+    sessionStorage.setItem(JOB_ID_KEY, jobId);
     let pollInterval;
+
+    const pollHeaders = () => {
+      const secret = sessionStorage.getItem(JOB_SECRET_KEY);
+      const h = {};
+      if (secret) {
+        h[POLL_HEADER] = secret;
+      }
+      return h;
+    };
 
     const checkStatus = async () => {
       try {
-        // Fetch lightweight status
-        const statusRes = await fetch(`/api/upload_statement_status/${jobId}`);
+        const statusRes = await fetch(apiUrl(`/api/upload_statement_status/${jobId}`), {
+          headers: pollHeaders(),
+        });
         if (!statusRes.ok) throw new Error('Upload session expired or lost.');
-        
+
         const data = await statusRes.json();
 
-        // Update the UI Pill
-        setUploadState(prev => ({
+        setUploadState((prev) => ({
           ...prev,
           active: true,
           message: data.message || 'Processing...',
           current: data.current_file || 0,
-          total: data.total_files || 0
+          total: data.total_files || 0,
         }));
 
-        // If complete, fetch the final heavy payload
         if (data.status === 'complete') {
           clearInterval(pollInterval);
-          
-          const resultRes = await fetch(`/api/upload_statement_result/${jobId}`);
+
+          const resultRes = await fetch(apiUrl(`/api/upload_statement_result/${jobId}`), {
+            headers: pollHeaders(),
+          });
           if (!resultRes.ok) throw new Error('Failed to fetch final results.');
-          
+
           const resultData = await resultRes.json();
           const merged = {
             ...resultData,
@@ -112,52 +137,46 @@ export function UploadProvider({ children }) {
           skippedDuplicatesRef.current = [];
           callbacksRef.current.onSuccess?.(merged);
 
-          // Keep the success message visible briefly for good UX
-          setUploadState(prev => ({ ...prev, message: data.message || 'All done!', isError: false }));
+          setUploadState((prev) => ({ ...prev, message: data.message || 'All done!', isError: false }));
           setTimeout(() => {
             setJobId(null);
-            setUploadState(prev => ({ ...prev, active: false }));
-          }, 2500); 
-        } 
-        
-        // Handle explicit backend errors
+            clearJobSession();
+            setUploadState((prev) => ({ ...prev, active: false }));
+          }, 2500);
+        }
+
         if (data.status === 'error') {
           throw new Error(data.message || 'Processing failed on the server.');
         }
-
       } catch (err) {
         clearInterval(pollInterval);
         handleError(err, 'Lost connection to processing server.');
       }
     };
 
-    // Start polling every 750ms
     pollInterval = setInterval(checkStatus, 750);
-    checkStatus(); // Fire immediately once before the first 750ms tick
+    checkStatus();
 
     return () => clearInterval(pollInterval);
   }, [jobId]);
 
-  // Expose the new state shape and the start function
-  const value = { 
-    uploadInProgress: uploadState.active, 
+  const value = {
+    uploadInProgress: uploadState.active,
     startUpload,
-    uploadState 
+    uploadState,
   };
 
   return (
     <UploadContext.Provider value={value}>
       {children}
       {uploadState.active && (
-        <div 
-          className={`upload-indicator ${uploadState.isError ? 'upload-error' : ''}`} 
-          aria-live="polite" 
+        <div
+          className={`upload-indicator ${uploadState.isError ? 'upload-error' : ''}`}
+          aria-live="polite"
           aria-label="Uploading statement"
         >
           {!uploadState.isError && <div className="upload-indicator-loonie" aria-hidden />}
-          <span className="upload-indicator-label">
-            {uploadState.message}
-          </span>
+          <span className="upload-indicator-label">{uploadState.message}</span>
         </div>
       )}
     </UploadContext.Provider>

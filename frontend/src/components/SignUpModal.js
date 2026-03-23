@@ -9,7 +9,7 @@ import './SignUpModal.css';
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 
 export default function SignUpModal({ onClose, onSuccess, switchToLogin }) {
-  const { analysis, source, accessToken, itemId, files } = useAnalysis();
+  const { analysis, source, itemId, files } = useAnalysis();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -55,7 +55,6 @@ export default function SignUpModal({ onClose, onSuccess, switchToLogin }) {
             {
               source: source || 'pdf',
               summary: analysis,
-              access_token: accessToken || undefined,
               item_id: itemId || undefined,
             },
             { headers: { Authorization: `Bearer ${token}` } }

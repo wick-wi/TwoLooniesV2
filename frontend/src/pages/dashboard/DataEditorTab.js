@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useAnalysis } from '../../context/AnalysisContext';
 import { useUpload } from '../../context/UploadContext';
 import UploadStatementModal from '../../components/UploadStatementModal';
-import { formatStatementUploadError } from '../../utils/statementUploadErrors';
+import { formatApiConnectionError, formatStatementUploadError } from '../../utils/statementUploadErrors';
 import TransactionTagInput from '../../components/TransactionTagInput';
 import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, Filter, ChevronDown, CheckSquare, Scale, ClipboardCheck, Triangle, Unlink, Check } from 'lucide-react';
 import Select from 'react-select';
@@ -15,6 +15,9 @@ import { formatMoney } from '../../utils/money';
 import './DataEditorTab.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
+
+/** Avoid infinite spinners if the API is down or hangs (axios default is no timeout). */
+const API_TIMEOUT_MS = 45_000;
 
 /** System-detected internal moves between accounts (unlink allowed); not credit-card payment links. */
 const SELF_TRANSFER_CATEGORY = 'Self-Transfer';
@@ -126,6 +129,9 @@ export default function DataEditorTab() {
   const [categorizeSuccess, setCategorizeSuccess] = useState(null);
   const [linkToken, setLinkToken] = useState(null);
   const [linkTokenError, setLinkTokenError] = useState(null);
+  const [linkTokenLoading, setLinkTokenLoading] = useState(false);
+  /** False until the first create_link_token attempt finishes (avoids flashing "unavailable" before fetch). */
+  const [linkTokenReady, setLinkTokenReady] = useState(false);
   const [showOnlyNeedsReview, setShowOnlyNeedsReview] = useState(false);
   /** IDs of transactions that stay visible under "Needs Review" filter after being categorized (cleared on refresh/filter change/bulk update) */
   const [stickyReviewedIds, setStickyReviewedIds] = useState([]);
@@ -164,20 +170,37 @@ export default function DataEditorTab() {
   const token = getAccessToken?.();
 
   const fetchLinkToken = useCallback(async () => {
+    if (!token) {
+      setLinkToken(null);
+      setLinkTokenLoading(false);
+      setLinkTokenError(null);
+      setLinkTokenReady(true);
+      return;
+    }
     setLinkTokenError(null);
+    setLinkTokenLoading(true);
     try {
-      const res = await axios.post(`${API_BASE}/api/create_link_token`);
+      const res = await axios.post(`${API_BASE}/api/create_link_token`, null, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: API_TIMEOUT_MS,
+      });
       setLinkToken(res.data.link_token);
     } catch (err) {
       console.error('Link token error:', err);
+      const hint = formatApiConnectionError(err, 'Bank link');
       const msg =
+        hint ||
         err.response?.data?.error ||
         err.response?.data?.detail ||
         err.message ||
         'Could not connect to bank linking service.';
       setLinkTokenError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      setLinkToken(null);
+    } finally {
+      setLinkTokenLoading(false);
+      setLinkTokenReady(true);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     fetchLinkToken();
@@ -204,20 +227,26 @@ export default function DataEditorTab() {
     async (public_token) => {
       if (!token) return;
       try {
-        const exchangeRes = await axios.post(`${API_BASE}/api/exchange_public_token`, { public_token });
-        const access_token = exchangeRes.data?.access_token;
+        const exchangeRes = await axios.post(
+          `${API_BASE}/api/exchange_public_token`,
+          { public_token },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         const item_id = exchangeRes.data?.item_id;
-        if (!access_token) throw new Error('No access token returned');
-        const txRes = await axios.post(`${API_BASE}/api/transactions`, { access_token });
+        if (!item_id) throw new Error('Bank link did not return an item id.');
+        const txRes = await axios.post(
+          `${API_BASE}/api/transactions`,
+          { item_id },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
         if (txRes.data.error) throw new Error(txRes.data.error);
-        const analysisData = { ...txRes.data, access_token, item_id };
+        const analysisData = { ...txRes.data, item_id };
         setAnalysisData(analysisData);
         await axios.post(
           `${API_BASE}/api/save_analysis`,
           {
             source: 'plaid',
             summary: txRes.data.analysis || {},
-            access_token,
             item_id: item_id || 'unknown',
           },
           { headers: { Authorization: `Bearer ${token}` } }
@@ -225,20 +254,30 @@ export default function DataEditorTab() {
         navigate('/dashboard');
       } catch (err) {
         console.error('Plaid flow error:', err);
-        setError(err.response?.data?.error || err.message || 'Something went wrong.');
+        const d = err.response?.data?.detail;
+        setError(
+          (typeof d === 'string' ? d : null) ||
+            err.response?.data?.error ||
+            err.message ||
+            'Something went wrong.'
+        );
       }
     },
     [token, setAnalysisData, navigate]
   );
 
   const fetchUserData = useCallback(async (options = {}) => {
-    if (!token) return;
     const { background } = options;
+    if (!token) {
+      if (!background) setLoading(false);
+      return;
+    }
     if (!background) setLoading(true);
     setError(null);
     try {
       const res = await axios.get(`${API_BASE}/api/user_data`, {
         headers: { Authorization: `Bearer ${token}` },
+        timeout: API_TIMEOUT_MS,
       });
       setStatements(res.data.statements || []);
       const accounts = res.data.accounts || [];
@@ -250,7 +289,13 @@ export default function DataEditorTab() {
       setAnalysisData(res.data);
       setStickyReviewedIds([]);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to load data');
+      const hint = formatApiConnectionError(err, 'Loading data');
+      setError(
+        hint ||
+          err.response?.data?.detail ||
+          err.message ||
+          'Failed to load data'
+      );
       setStatements([]);
       clearAnalysis?.();
     } finally {
@@ -265,7 +310,7 @@ export default function DataEditorTab() {
       return;
     }
     fetchUserData();
-  }, [isAuthenticated, authLoading, fetchUserData, navigate]);
+  }, [isAuthenticated, authLoading, token, fetchUserData, navigate]);
 
   useEffect(() => {
     try {
@@ -974,12 +1019,16 @@ export default function DataEditorTab() {
               <Landmark size={18} /> Connect Bank
             </PlaidConnectButton>
           ) : linkTokenError ? (
-            <button onClick={fetchLinkToken} className="data-editor-btn data-editor-btn-secondary">
+            <button type="button" onClick={fetchLinkToken} className="data-editor-btn data-editor-btn-secondary">
               Retry Connect Bank
             </button>
-          ) : (
-            <button disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
+          ) : !linkTokenReady || linkTokenLoading ? (
+            <button type="button" disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
               Loading...
+            </button>
+          ) : (
+            <button type="button" disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
+              Bank link unavailable
             </button>
           )}
           <button onClick={() => setShowUploadModal(true)} className="data-editor-btn data-editor-btn-primary">
@@ -1025,12 +1074,16 @@ export default function DataEditorTab() {
                   <Landmark size={18} /> Connect Bank Account
                 </PlaidConnectButton>
               ) : linkTokenError ? (
-                <button onClick={fetchLinkToken} className="data-editor-btn data-editor-btn-secondary">
+                <button type="button" onClick={fetchLinkToken} className="data-editor-btn data-editor-btn-secondary">
                   Retry Connect Bank
                 </button>
-              ) : (
-                <button disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
+              ) : !linkTokenReady || linkTokenLoading ? (
+                <button type="button" disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
                   Loading Plaid...
+                </button>
+              ) : (
+                <button type="button" disabled className="data-editor-btn data-editor-btn-secondary opacity-60">
+                  Bank link unavailable
                 </button>
               )}
               <button onClick={() => setShowUploadModal(true)} className="data-editor-btn data-editor-btn-primary">
