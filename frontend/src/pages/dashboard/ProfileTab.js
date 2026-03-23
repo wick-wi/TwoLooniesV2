@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabase';
 import './ProfileTab.css';
@@ -126,6 +127,24 @@ export default function ProfileTab() {
             {saving ? 'Saving...' : 'Save'}
           </button>
         </form>
+      </div>
+
+      <div className="glass-card profile-tab-card profile-tab-legal">
+        <h3 className="profile-tab-legal-title">Legal & privacy</h3>
+        <p className="profile-tab-legal-intro">
+          How we handle your data and the rules for using Two Loonies.
+        </p>
+        <nav className="profile-tab-legal-links" aria-label="Legal">
+          <Link to="/privacy" className="profile-tab-legal-link">
+            Privacy Policy
+          </Link>
+          <Link to="/terms" className="profile-tab-legal-link">
+            Terms of Use
+          </Link>
+          <Link to="/legal/subprocessors" className="profile-tab-legal-link">
+            Subprocessors
+          </Link>
+        </nav>
       </div>
     </div>
   );

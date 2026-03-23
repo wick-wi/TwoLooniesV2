@@ -367,8 +367,61 @@
 
 .data-editor-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.9rem;
+}
+
+/* Column widths — description column wraps up to 3 lines then clamps (see .data-editor-desc-main) */
+.data-editor-table > thead > tr:first-child > th:nth-child(1),
+.data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(1),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(1) {
+  width: 10rem;
+}
+
+.data-editor-table > thead > tr:first-child > th:nth-child(2),
+.data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(2),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(2) {
+  max-width: 28rem;
+  width: 36%;
+  overflow: visible;
+  vertical-align: top;
+}
+
+/* Top-align row content when description wraps to multiple lines */
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(1),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(3),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(4),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(5),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(6) {
+  vertical-align: top;
+}
+
+.data-editor-table > thead > tr:first-child > th:nth-child(3),
+.data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(3),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(3) {
+  width: 7.5rem;
+}
+
+.data-editor-table > thead > tr:first-child > th:nth-child(4),
+.data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(4),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(4) {
+  width: 20%;
+  min-width: 8.5rem;
+}
+
+.data-editor-table > thead > tr:first-child > th:nth-child(5),
+.data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(5),
+.data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(5) {
+  width: 14%;
+  min-width: 6.5rem;
+}
+
+/* Full-width rows (empty state, transfer detail) must not inherit per-column widths */
+.data-editor-table tbody td[colspan] {
+  width: auto;
+  max-width: none;
+  overflow: visible;
 }
 
 .data-editor-table th,
@@ -508,6 +561,51 @@
 .data-editor-th-filter-icon {
   flex-shrink: 0;
   opacity: 0.9;
+}
+
+.data-editor-th-date-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.data-editor-date-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem;
+  margin: 0;
+  line-height: 0;
+  color: #94a3b8;
+  background: none;
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.data-editor-date-sort-btn:hover {
+  color: #fbbf24;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.data-editor-th-filter-active .data-editor-date-sort-btn {
+  color: #cbd5e1;
+}
+
+.data-editor-th-filter-active .data-editor-date-sort-btn:hover {
+  color: #fbbf24;
+}
+
+/* Lucide Triangle default points up → ascending (oldest first at top) */
+.data-editor-date-sort-triangle {
+  flex-shrink: 0;
+  transform-origin: center;
+  transition: transform 0.15s ease;
+}
+
+.data-editor-date-sort-triangle--desc {
+  transform: rotate(180deg);
 }
 
 /* Filter row (second row in thead) */
@@ -699,16 +797,22 @@
 
 .data-editor-desc {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   min-width: 0;
 }
 
 .data-editor-desc-main {
+  flex: 1 1 0;
   min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.4;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .data-editor-transfer-pill {
@@ -736,6 +840,20 @@
   padding-top: 0;
 }
 
+/* First cell (colspan 5) is :first-child and would inherit nowrap from td:first-child — allow match text to wrap */
+.data-editor-table tbody tr.data-editor-transfer-detail-row > td {
+  white-space: normal;
+}
+
+.data-editor-transfer-detail-main-cell {
+  vertical-align: top;
+}
+
+.data-editor-transfer-detail-actions-cell {
+  vertical-align: top;
+  text-align: center;
+}
+
 .data-editor-transfer-detail {
   margin: 0.25rem 0 0.5rem;
   padding: 0.5rem 0.75rem;
@@ -744,6 +862,43 @@
   border: 1px solid rgba(251, 191, 36, 0.18);
   color: #e2e8f0;
   font-size: 0.85rem;
+  min-width: 0;
+}
+
+.data-editor-transfer-detail-text {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.data-editor-unlink-self-transfer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fca5a5;
+  border-radius: 0.375rem;
+  padding: 0.4rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.data-editor-unlink-self-transfer-icon {
+  flex-shrink: 0;
+}
+
+.data-editor-unlink-self-transfer:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.18);
+}
+
+.data-editor-unlink-self-transfer:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 /* Actions column – sticky on the right (stays visible when scrolling horizontally) */
@@ -771,6 +926,42 @@
 
 .data-editor-actions-cell {
   vertical-align: middle;
+}
+
+.data-editor-actions-cell-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.data-editor-mark-reviewed {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.1);
+  color: #6ee7b7;
+  border-radius: 0.375rem;
+  padding: 0.4rem;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.data-editor-mark-reviewed-icon {
+  flex-shrink: 0;
+}
+
+.data-editor-mark-reviewed:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.18);
+}
+
+.data-editor-mark-reviewed:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .data-editor-bulk-inline {

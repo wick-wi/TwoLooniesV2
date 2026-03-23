@@ -1,8 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CircleUser, LogOut, User } from 'lucide-react';
+import { CircleUser, FileText, LogOut, User } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../lib/supabase';
+
+const LEGAL_LINKS = [
+  { to: '/privacy', label: 'Privacy' },
+  { to: '/terms', label: 'Terms' },
+  { to: '/legal/subprocessors', label: 'Subprocessors' },
+];
 
 export default function ProfileMenu({ onLogout }) {
   const { user } = useAuth();
@@ -75,6 +81,26 @@ export default function ProfileMenu({ onLogout }) {
             <User className="w-4 h-4" strokeWidth={1.5} />
             Profile
           </button>
+          <div className="border-t border-white/10 mt-1 pt-1">
+            <p className="px-4 py-1.5 text-[0.65rem] font-medium uppercase tracking-wide text-slate-500">
+              Legal
+            </p>
+            {LEGAL_LINKS.map(({ to, label }) => (
+              <button
+                key={to}
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  navigate(to);
+                }}
+                className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-white/5 hover:text-white transition-colors"
+                role="menuitem"
+              >
+                <FileText className="w-4 h-4 shrink-0 opacity-70" strokeWidth={1.5} />
+                {label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => {

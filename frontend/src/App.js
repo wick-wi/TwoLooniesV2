@@ -6,6 +6,9 @@ import { UploadProvider } from './context/UploadContext';
 import Landing from './pages/Landing';
 import Analysis from './pages/Analysis';
 import ResetPassword from './pages/ResetPassword';
+import PrivacyPage from './pages/legal/PrivacyPage';
+import TermsPage from './pages/legal/TermsPage';
+import SubprocessorsPage from './pages/legal/SubprocessorsPage';
 import DashboardShell from './components/DashboardShell';
 import DashboardTab from './pages/dashboard/DashboardTab';
 import WealthTab from './pages/dashboard/WealthTab';
@@ -56,6 +59,9 @@ function App() {
             <Route path="/" element={<LandingRoute />} />
             <Route path="/analysis" element={<Analysis />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/legal/subprocessors" element={<SubprocessorsPage />} />
             <Route path="/dashboard" element={<ProtectedDashboard />}>
               <Route index element={<DashboardTab />} />
               <Route path="wealth" element={<WealthTab />} />

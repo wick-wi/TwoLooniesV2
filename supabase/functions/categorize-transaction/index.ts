@@ -5,7 +5,7 @@ const BATCH_SIZE = 100;
 const DEFAULT_MAX_TRANSACTIONS = 200;
 
 const FALLBACK_CATEGORIES =
-  "Income, Housing, Utilities & Phone, Groceries, Dining & Coffee, Transport & Auto, E-Transfer, Debt & Interest, Entertainment & Subs, Travel, Household & Shopping, Health & Wellness, Financial & Investing, Miscellaneous";
+  "Income, Housing, Utilities & Phone, Groceries, Dining & Coffee, Transport & Auto, E-Transfer, Debt & Interest, Entertainment & Subs, Travel, Household & Shopping, Health & Wellness, Bank & broker fees, Miscellaneous";
 
 let cachedCategoriesString: string | null = null;
 let cachedCategoriesDebug: { source: string; count: number; preview: string; url?: string } | null = null;

@@ -6,7 +6,8 @@ import { useAuth } from '../context/AuthContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import { useUpload } from '../context/UploadContext';
 import UploadStatementModal from '../components/UploadStatementModal';
-import { FileText, Trash2, RefreshCw, Plus, Landmark } from 'lucide-react';
+import { formatStatementUploadError } from '../utils/statementUploadErrors';
+import { FileText, Trash2, RefreshCw, Plus, Landmark, Scale } from 'lucide-react';
 import './Dashboard.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
@@ -26,17 +27,14 @@ function PlaidConnectButton({ linkToken, onSuccess, className, children }) {
 }
 
 function uploadErrorMessage(err) {
-  const detail = err.response?.data?.detail;
-  const errBody = err.response?.data?.error;
-  let msg = errBody
-    || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
-    || (typeof detail === 'string' ? detail : null)
-    || err.message
-    || 'Upload failed.';
-  if (err.response?.status === 500 && !errBody && !detail) {
-    msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
-  }
-  return msg;
+  return formatStatementUploadError(err);
+}
+
+function isStatementBalanceReconciled(statement) {
+  if (!statement) return false;
+  const bankOk = !!statement.validation_applicable && !!statement.balances_reconciled;
+  const cashOk = !!statement.cash_validation_applicable && !!statement.cash_balances_reconciled;
+  return bankOk || cashOk;
 }
 
 export default function Dashboard() {
@@ -139,6 +137,7 @@ export default function Dashboard() {
         transactions: res.data.transactions,
         analysis: res.data.analysis,
         source: 'pdf',
+        balances: res.data.balances,
       });
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to delete');
@@ -160,6 +159,7 @@ export default function Dashboard() {
         transactions: res.data.transactions,
         analysis: res.data.analysis,
         source: 'pdf',
+        balances: res.data.balances,
       });
     } catch (err) {
       setError(err.response?.data?.detail || err.message || 'Failed to rerun');
@@ -169,6 +169,13 @@ export default function Dashboard() {
   };
 
   const onUploadSuccess = async (data) => {
+    const skipNote =
+      data?.skipped_duplicates?.length > 0
+        ? `Already in your account (skipped): ${data.skipped_duplicates.map((s) => s.filename).join(', ')}`
+        : null;
+    if (skipNote) setError(skipNote);
+    else setError(null);
+
     if (!token || !data.files?.length) {
       setAnalysisData(data);
       setShowUploadModal(false);
@@ -308,6 +315,21 @@ export default function Dashboard() {
                       <span className="statement-meta">
                         {(s.transactions?.length ?? 0)} transactions
                       </span>
+                      <span
+                        className={`dashboard-statement-balance-icon${isStatementBalanceReconciled(s) ? ' is-active' : ''}`}
+                        title={
+                          isStatementBalanceReconciled(s)
+                            ? 'Balances reconcile with transactions'
+                            : 'Balances not reconciled or not applicable'
+                        }
+                        aria-label={
+                          isStatementBalanceReconciled(s)
+                            ? 'Balances reconcile with transactions'
+                            : 'Balances not reconciled or not applicable'
+                        }
+                      >
+                        <Scale size={14} />
+                      </span>
                     </div>
                     <button
                       onClick={() => handleDeleteStatement(s.id)}
@@ -394,6 +416,7 @@ export default function Dashboard() {
 
       {showUploadModal && (
         <UploadStatementModal
+          accessToken={token}
           onClose={() => setShowUploadModal(false)}
           onSuccess={onUploadSuccess}
           onStartUpload={(promise) =>

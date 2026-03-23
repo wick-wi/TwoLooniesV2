@@ -70,13 +70,12 @@ function groupAccounts(accounts) {
       : [{ amount: 0, currency: 'CAD', date: null }];
     for (const b of balances) {
       const balance = Number(b.amount ?? 0);
-      const displayBalance = isLiability && balance > 0 ? -balance : balance;
       groups[groupKey].push({
         id: `${a.id}-${b.currency}`,
         accountId: a.id,
         provider: displayName,
         type: subtype,
-        balance: displayBalance,
+        balance,
         currency: b.currency || 'CAD',
         date: b.date ?? null,
         isLiability,

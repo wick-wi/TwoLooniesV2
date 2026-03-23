@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import axios from 'axios';
 import { useAnalysis } from '../context/AnalysisContext';
@@ -117,6 +118,17 @@ export default function SignUpModal({ onClose, onSuccess, switchToLogin }) {
               </div>
             </label>
             {error && <p className="modal-error">{error}</p>}
+            <p className="modal-hint" style={{ marginTop: '1rem', fontSize: '0.8rem', lineHeight: 1.5 }}>
+              By creating an account you agree to our{' '}
+              <Link to="/terms" className="text-amber-400/90 hover:underline">
+                Terms of Use
+              </Link>{' '}
+              and{' '}
+              <Link to="/privacy" className="text-amber-400/90 hover:underline">
+                Privacy Policy
+              </Link>
+              .
+            </p>
           </div>
           <div className="modal-footer">
             {switchToLogin && (

@@ -10,6 +10,7 @@ export function AnalysisProvider({ children }) {
   const [accessToken, setAccessToken] = useState(null);
   const [itemId, setItemId] = useState(null);
   const [files, setFiles] = useState([]);
+  const [balances, setBalances] = useState([]);
 
   const setAnalysisData = useCallback((data) => {
     setAnalysis(data?.analysis || null);
@@ -19,6 +20,7 @@ export function AnalysisProvider({ children }) {
     setAccessToken(data?.access_token || null);
     setItemId(data?.item_id || null);
     setFiles(data?.files || []);
+    setBalances((prev) => (Array.isArray(data?.balances) ? data.balances : prev));
   }, []);
 
   const clearAnalysis = useCallback(() => {
@@ -29,6 +31,7 @@ export function AnalysisProvider({ children }) {
     setAccessToken(null);
     setItemId(null);
     setFiles([]);
+    setBalances([]);
   }, []);
 
   return (
@@ -41,6 +44,7 @@ export function AnalysisProvider({ children }) {
         accessToken,
         itemId,
         files,
+        balances,
         setAnalysisData,
         clearAnalysis,
       }}
