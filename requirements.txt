@@ -9,3 +9,6 @@ python-multipart
 requests
 supabase
 PyJWT
+redis
+qstash
+upstash-redis

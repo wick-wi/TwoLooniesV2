@@ -4,7 +4,12 @@
       "id": "self_transfer",
       "name": "Self-Transfer",
       "tier1": "Financial",
-      "keywords": []
+      "keywords": [
+        "WSINVESTMENTS",
+        "INTERNAL TRANSFER",
+        "ACCOUNT TO ACCOUNT TRANSFER",
+        "TRANSFER BETWEEN ACCOUNTS"
+      ]
     },
     {
         "id": "credit_card_payment",
@@ -86,10 +91,60 @@
       "keywords": ["SHOPPERS DRUG MART", "REXALL", "GOODLIFE", "FIT4LESS", "DENTIST", "OPTICAL", "REMEDY'S"]
     },
     {
-      "id": "financial",
-      "name": "Financial & Investing",
+      "id": "securities_trading",
+      "name": "Securities Trading",
       "tier1": "Financial",
-      "keywords": ["TRANSFER", "WS CASH", "WEALTHSIMPLE", "QUESTRADE", "CRA-ADX", "SERVICE ONTARIO"]
+      "force_if_keywords_present": true,
+      "keywords": [
+        "PURCHASE OF SECURITIES",
+        "SALE OF SECURITIES",
+        "SECURITIES PURCHASE",
+        "SECURITIES SALE",
+        "MUTUAL FUND PURCHASE",
+        "MUTUAL FUND REDEMPTION",
+        "WEALTHSIMPLE BUY",
+        "WEALTHSIMPLE SELL",
+        "WEALTHSIMPLE TRADE",
+        "QUESTRADE BUY",
+        "QUESTRADE SELL",
+        "STOCK PURCHASE",
+        "STOCK SALE",
+        "ETF PURCHASE",
+        "ETF SALE",
+        "BUY TO OPEN",
+        "BUY TO CLOSE",
+        "SELL TO OPEN",
+        "SELL TO CLOSE"
+      ]
+    },
+    {
+      "id": "financial",
+      "name": "Bank & broker fees",
+      "tier1": "Financial",
+      "keywords": [
+        "WEALTHSIMPLE MANAGEMENT FEE",
+        "WEALTHSIMPLE FEE",
+        "QUESTRADE FEE",
+        "FOREIGN EXCHANGE FEE",
+        "FOREIGN EXCHANGE CHARGE",
+        "FX FEE",
+        "ECN FEE",
+        "COMMISSION",
+        "WIRE FEE",
+        "NSF FEE",
+        "NSF CHARGE",
+        "OVERDRAFT FEE",
+        "OVERDRAFT CHARGE",
+        "MONTHLY FEE",
+        "ACCOUNT MAINTENANCE FEE",
+        "ADMINISTRATION FEE",
+        "ADMIN FEE",
+        "INACTIVITY FEE",
+        "DORMANT FEE",
+        "SAFEKEEPING FEE",
+        "TRADING FEE",
+        "MARGIN INTEREST"
+      ]
     },
     {
       "id": "loans_reimbursements",

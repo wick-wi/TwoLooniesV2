@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
 import axios from 'axios';
 import { useAnalysis } from '../context/AnalysisContext';
@@ -11,6 +11,7 @@ import {
   Zap,
 } from 'lucide-react';
 import UploadStatementModal from '../components/UploadStatementModal';
+import { formatStatementUploadError } from '../utils/statementUploadErrors';
 import LoginModal from '../components/LoginModal';
 import SignUpModal from '../components/SignUpModal';
 import ForgotPasswordModal from '../components/ForgotPasswordModal';
@@ -34,7 +35,7 @@ export default function Landing() {
   const navigate = useNavigate();
   const location = useLocation();
   const { setAnalysisData } = useAnalysis();
-  const { isAuthenticated, signOut } = useAuth();
+  const { isAuthenticated, signOut, getAccessToken } = useAuth();
   const { startUpload } = useUpload();
   const [linkToken, setLinkToken] = useState(null);
   const [, setLinkTokenLoading] = useState(true);
@@ -93,15 +94,9 @@ export default function Landing() {
     navigate('/analysis');
   };
 
-  const uploadErrorMessage = (err) => {
-    const detail = err.response?.data?.detail;
-    const errBody = err.response?.data?.error;
-    return errBody
-      || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
-      || (typeof detail === 'string' ? detail : null)
-      || err.message
-      || 'Upload failed.';
-  };
+  const landingUploadToken = getAccessToken?.() ?? null;
+
+  const uploadErrorMessage = (err) => formatStatementUploadError(err);
 
   return (
     <div className="min-h-screen bg-[#020617] text-white font-sans relative overflow-hidden">
@@ -259,16 +254,26 @@ export default function Landing() {
           <p className="text-slate-500 text-sm">
             © 2026 Two Loonies. Built with ❤️ in Canada.
           </p>
-          <nav className="flex items-center gap-6 text-slate-400 text-sm">
-            <a href="#security" className="hover:text-white transition-colors duration-200">Security</a>
-            <a href="#privacy" className="hover:text-white transition-colors duration-200">Privacy</a>
-            <a href="#faq" className="hover:text-white transition-colors duration-200">FAQ</a>
+          <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-slate-400 text-sm">
+            <Link to="/privacy#security" className="hover:text-white transition-colors duration-200">
+              Security
+            </Link>
+            <Link to="/privacy" className="hover:text-white transition-colors duration-200">
+              Privacy
+            </Link>
+            <Link to="/terms" className="hover:text-white transition-colors duration-200">
+              Terms
+            </Link>
+            <Link to="/legal/subprocessors" className="hover:text-white transition-colors duration-200">
+              Subprocessors
+            </Link>
           </nav>
         </div>
       </footer>
 
       {showUploadModal && (
         <UploadStatementModal
+          accessToken={landingUploadToken}
           onClose={() => setShowUploadModal(false)}
           onSuccess={onUploadSuccess}
           onStartUpload={(promise) =>

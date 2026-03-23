@@ -28,10 +28,29 @@ def _infer_category(description: str) -> str:
     return "Other"
 
 
-# Categories that are excluded from income/expense (like internal transfers)
+# Categories excluded from headline income/expense unless the row is an orphan leg of a linked pair
+# (partner id not in the same transaction list).
 EXCLUDE_FROM_CASHFLOW_CATEGORIES = frozenset(
-    {"Self-Transfer", "Credit Card Payment", "Loans & Reimbursements"}
+    {
+        "Self-Transfer",
+        "Credit Card Payment",
+        "Loans & Reimbursements",
+        "Reimbursements & Loans",
+    }
 )
+
+
+def _skip_for_cashflow_aggregate(t: dict[str, Any], id_set: set[str]) -> bool:
+    """Omit paired legs when both are in scope; keep orphan legs visible despite excluded categories."""
+    lid = t.get("linked_transaction_id")
+    if lid and str(lid) in id_set:
+        return True
+    cat = (t.get("category") or "").strip()
+    if cat not in EXCLUDE_FROM_CASHFLOW_CATEGORIES:
+        return False
+    if lid and str(lid) not in id_set:
+        return False
+    return True
 
 
 # Refund indicators: positive amounts with these in description reduce expenses
@@ -53,8 +72,8 @@ def _is_refund(t: dict[str, Any]) -> bool:
 def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Compute detailed analysis from transaction list.
-    Each transaction: { date, description, amount, category?, is_transfer? (excluded from income/expense) }
-    Transfers (is_transfer) are excluded from total_income and total_expenses.
+    Omits rows whose linked_transaction_id points at another row in the same list (paired transfer/payment).
+    Excluded categories omit rows only when the link partner is present in the list; orphan legs stay in totals.
     Refunds (positive amount + refund-like description) reduce total_expenses.
     """
     if not transactions:
@@ -74,6 +93,8 @@ def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
     by_merchant: dict[str, float] = defaultdict(float)
     by_month: dict[str, float] = defaultdict(float)
 
+    id_set = {str(t.get("id")) for t in transactions if t.get("id") is not None}
+
     for t in transactions:
         try:
             amount = float(t.get("amount", 0) or 0)
@@ -82,10 +103,8 @@ def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
         desc = (t.get("description") or t.get("name") or "Unknown").strip()
         cat = t.get("category") or _infer_category(desc)
         date_str = t.get("date")
-        is_transfer = t.get("is_transfer") is True
-        exclude_category = (cat or "").strip() in EXCLUDE_FROM_CASHFLOW_CATEGORIES
 
-        if is_transfer or exclude_category:
+        if _skip_for_cashflow_aggregate(t, id_set):
             continue
         if amount > 0:
             if _is_refund(t):

@@ -1,12 +1,18 @@
+import hashlib
 import json
 import logging
 import os
 import re
 import tempfile
 import uuid
+import asyncio
+from uuid import uuid4
+from fastapi import BackgroundTasks
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from fastapi.encoders import jsonable_encoder
+
 
 _ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,6 +53,548 @@ load_dotenv(dotenv_path=str(env_path), override=True)
 if env_local.exists():
     load_dotenv(dotenv_path=str(env_local), override=True)
 
+app = FastAPI()
+
+from .upload_job_redis import job_redis_get, job_redis_setex
+
+# Job state: Upstash REST if UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN; else REDIS_URL (e.g. local Docker).
+# The Job Management Helpers
+async def create_job(total_files: int) -> str:
+    job_id = str(uuid4())
+    job_data = {
+        "status": "queued",
+        "message": "Preparing your files...",
+        "current_file": 0,
+        "total_files": total_files,
+        "result": None
+    }
+    # Save to Redis as a JSON string.
+    # 'setex' sets an expiration time of 3600 seconds (1 hour).
+    # This automatically deletes old jobs so you never run out of memory.
+    try:
+        await job_redis_setex(job_id, 3600, json.dumps(job_data))
+    except Exception as e:
+        logger.exception("Failed to create Redis job %s: %s", job_id, e)
+        raise HTTPException(status_code=503, detail="Upload queue is unavailable right now. Please try again.")
+    return job_id
+
+async def get_job(job_id: str) -> dict:
+    try:
+        data = await job_redis_get(job_id)
+    except Exception as e:
+        logger.exception("Failed to fetch Redis job %s: %s", job_id, e)
+        return None
+    if data:
+        try:
+            return json.loads(data)
+        except Exception:
+            logger.warning("Corrupt job payload for job_id=%s", job_id)
+            return None
+    return None
+
+async def update_job(job_id: str, **kwargs):
+    job_data = await get_job(job_id)
+    if job_data:
+        # Update only the specific fields we pass in
+        job_data.update(kwargs)
+        # jsonable_encoder is the magic fix: it safely converts dates/models to standard dicts!
+        safe_data = jsonable_encoder(job_data)
+        try:
+            await job_redis_setex(job_id, 3600, json.dumps(safe_data))
+        except Exception as e:
+            logger.exception("Failed to update Redis job %s: %s", job_id, e)
+
+# 3. The REAL Background Worker (The Brain Transplant)
+async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None = None):
+    total_files = len(file_data)
+    all_transactions = []
+    files_breakdown = []
+    
+    storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
+    _try_create_storage_bucket = bool(supabase and storage_bucket_name)
+    _storage_bucket_created = False
+
+    try:
+        from .utils.gemini_model import (
+            get_configured_genai_model,
+            get_configured_genai_model_pass2,
+            get_configured_instructor_model_pass2,
+        )
+        PASS1_MODEL = get_configured_genai_model()
+        PASS2_MODEL = get_configured_genai_model_pass2()
+        PASS3_INSTRUCTOR_MODEL = get_configured_instructor_model_pass2()
+
+        for idx, file_item in enumerate(file_data):
+            current = idx + 1
+            fname = file_item["filename"]
+            content = file_item["content"]
+
+            await update_job(
+                job_id, 
+                status="analyzing", 
+                current_file=current,
+                message=f"Extracting data from {fname} ({current} of {total_files})..."
+            )
+
+            storage_path = file_item.get("storage_path")
+            if supabase and storage_bucket_name and not storage_path:
+                if _try_create_storage_bucket and not _storage_bucket_created:
+                    try:
+                        supabase.storage.create_bucket(storage_bucket_name, options={"public": False})
+                    except Exception:
+                        pass
+                    _storage_bucket_created = True
+
+                key_prefix = f"{user_id.strip()}/" if isinstance(user_id, str) and user_id.strip() else ""
+                object_key = f"{key_prefix}{uuid.uuid4()}.pdf"
+                try:
+                    supabase.storage.from_(storage_bucket_name).upload(
+                        object_key, content, {"content-type": "application/pdf"}
+                    )
+                    storage_path = f"{storage_bucket_name}/{object_key}"
+                except Exception as e:
+                    logger.warning("Supabase Storage upload failed for %s: %s", fname, e)
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            
+            try:
+                # USE A THREAD: Don't block the FastAPI server while parsing the PDF!
+                structured_text = await asyncio.to_thread(pdf_to_structured_text, Path(tmp_path))
+                
+                if not structured_text.strip():
+                    raise RuntimeError("This PDF appears to be scanned images (no extractable text). OCR is coming soon.")
+
+                def _process_extraction(*, extraction, extraction_method: str) -> tuple[list[dict], list[dict], dict]:
+                    meta = extraction.model_dump()
+                    txns_list = meta.pop("transactions", [])
+                    holdings_list = meta.pop("holdings", [])
+                    provider = meta.get("provider") or "Unknown"
+                    account_id_from_stmt = meta.get("account_id")
+                    opening_balance = meta.get("opening_balance")
+                    closing_balance = meta.get("closing_balance")
+                    opening_cash_balance = meta.get("opening_cash_balance")
+                    closing_cash_balance = meta.get("closing_cash_balance")
+                    currency = meta.get("currency") or "CAD"
+                    start_date = meta.get("start_date")
+                    end_date = meta.get("end_date")
+                    account_type = meta.get("account_type") or "Chequing"
+                    plaid_type = get_plaid_type(account_type) or "depository"
+                    investment_account = plaid_type == "investment"
+
+                    transactions = _select_transactions_for_account_type(txns_list, account_type)
+                    transactions = _strip_balance_lines(transactions)
+
+                    running_ok = True
+                    running_mismatch_count = 0
+                    running_validated_count = 0
+
+                    if account_type == "Credit Card":
+                        _normalize_credit_card_signs(transactions)
+                    elif not investment_account:
+                        _, running_ok, running_mismatch_count, running_validated_count = _validate_signs_from_running_balance(
+                            transactions, opening_balance, filename=fname,
+                        )
+
+                    closing_ok = True
+                    if not investment_account and transactions and closing_balance is not None:
+                        last_rb = None
+                        for t in reversed(transactions):
+                            if t.get("running_balance") is not None:
+                                last_rb = t["running_balance"]
+                                break
+                        if last_rb is not None and abs(last_rb - closing_balance) > 0.02:
+                            closing_ok = False
+
+                    delta_ok, _, _ = _validate_opening_plus_delta_equals_closing(
+                        transactions,
+                        opening_balance,
+                        closing_balance,
+                        account_type,
+                        filename=fname,
+                    )
+
+                    cash_delta_ok = True
+                    if investment_account and opening_cash_balance is not None and closing_cash_balance is not None:
+                        tx_sum = round(sum(float(t.get("amount", 0) or 0) for t in transactions), 2)
+                        cash_delta_ok = (
+                            abs(
+                                float(opening_cash_balance) + tx_sum - float(closing_cash_balance)
+                            )
+                            <= STATEMENT_BALANCE_TOLERANCE
+                        )
+
+                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok
+
+                    for t in transactions:
+                        if isinstance(t, dict) and not t.get("currency"):
+                            t["currency"] = currency
+
+                    logger.info(
+                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
+                        extraction_method,
+                        account_type,
+                        get_generates_transactions(account_type),
+                        investment_account,
+                        len(transactions),
+                        len(holdings_list),
+                        validation_ok,
+                        cash_delta_ok if investment_account else True,
+                        running_mismatch_count,
+                        running_validated_count,
+                        closing_ok,
+                        delta_ok,
+                    )
+
+                    extra = {
+                        "validation_ok": validation_ok,
+                        "running_mismatch_count": running_mismatch_count,
+                        "running_validated_count": running_validated_count,
+                        "closing_ok": closing_ok,
+                        "delta_ok": delta_ok,
+                        "cash_delta_ok": cash_delta_ok,
+                        "extraction_method": extraction_method,
+                        "provider": provider,
+                        "account_id_from_stmt": account_id_from_stmt,
+                        "opening_balance": opening_balance,
+                        "closing_balance": closing_balance,
+                        "opening_cash_balance": opening_cash_balance,
+                        "closing_cash_balance": closing_cash_balance,
+                        "currency": currency,
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "account_type": account_type,
+                        "holdings_list": holdings_list,
+                    }
+                    return transactions, holdings_list, extra
+
+                # Pass 1
+                # USE A THREAD: Don't block the server while Gemini is thinking!
+                extraction1 = await asyncio.to_thread(
+                    extract_statement_from_structured_text, structured_text, model=PASS1_MODEL
+                )
+                transactions, holdings_list, extra = _process_extraction(
+                    extraction=extraction1, extraction_method=f"pdfplumber+{PASS1_MODEL}"
+                )
+
+                # Pass 2 (retry on validation failure)
+                pass2_used = False
+                pass3_used = False
+                if not extra["validation_ok"]:
+                    pass2_used = True
+                    extraction2 = await asyncio.to_thread(
+                        extract_statement_from_structured_text, structured_text, model=PASS2_MODEL
+                    )
+                    transactions, holdings_list, extra = _process_extraction(
+                        extraction=extraction2, extraction_method=f"pdfplumber+{PASS2_MODEL}"
+                    )
+
+                # Pass 3 (Docling)
+                if not extra["validation_ok"]:
+                    pass3_used = True
+                    from .parsers.schema import StatementExtraction
+                    markdown = await asyncio.to_thread(pdf_to_markdown, Path(tmp_path), filename=fname)
+                    docling_meta, docling_txns, docling_holdings = await asyncio.to_thread(
+                        extract_statement_with_llm, markdown, model=PASS3_INSTRUCTOR_MODEL
+                    )
+                    extraction3 = StatementExtraction.model_validate(
+                        {**docling_meta, "transactions": docling_txns, "holdings": docling_holdings}
+                    )
+                    transactions, holdings_list, extra = _process_extraction(
+                        extraction=extraction3, extraction_method=f"docling+{PASS2_MODEL}"
+                    )
+
+                all_transactions.extend(transactions)
+                files_breakdown.append({
+                    "filename": fname,
+                    "content_sha256": file_item.get("content_sha256"),
+                    "transactions": transactions,
+                    "holdings": holdings_list,
+                    "opening_balance": extra["opening_balance"],
+                    "closing_balance": extra["closing_balance"],
+                    "opening_cash_balance": extra.get("opening_cash_balance"),
+                    "closing_cash_balance": extra.get("closing_cash_balance"),
+                    "account_id": extra["account_id_from_stmt"],
+                    "account_type": extra["account_type"],
+                    "provider": extra["provider"],
+                    "currency": extra["currency"],
+                    "start_date": extra["start_date"],
+                    "end_date": extra["end_date"],
+                    "storage_path": storage_path,
+                    "extraction_method": extra.get("extraction_method"),
+                    "retry_pass_2_used": pass2_used,
+                    "retry_pass_3_used": pass3_used,
+                    "validation_ok": extra.get("validation_ok"),
+                    "cash_delta_ok": extra.get("cash_delta_ok"),
+                })
+
+            except Exception as e:
+                raise Exception(f"Failed to parse '{fname}': {str(e)}")
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+        # --- Final Categorization & Wrap Up ---
+        await update_job(job_id, status="analyzing", message="Categorizing transactions...")
+        
+        # Threads again for heavy math/analysis
+        cat_count, flagged_count = await asyncio.to_thread(_apply_categorization, all_transactions)
+        analysis = await asyncio.to_thread(analyze_transactions, all_transactions)
+
+        final_result = {
+            "transactions": all_transactions,
+            "analysis": analysis,
+            "source": "pdf",
+            "files": files_breakdown,
+            "processing_summary": {
+                "transactions_categorized": cat_count,
+                "flagged_for_review": flagged_count,
+            }
+        }
+
+        # Job is complete! Save the massive AI payload to Redis safely
+        await update_job(job_id, status="complete", message="All done!", result=final_result)
+
+    except Exception as e:
+        logger.exception("Background processing failed: %s", e)
+        job_snapshot = await get_job(job_id)
+        pending_specs = (job_snapshot or {}).get("pending_file_specs") or []
+        if pending_specs:
+            from .statement_job_dispatch import delete_pending_statement_specs
+
+            await delete_pending_statement_specs(pending_specs)
+        await update_job(job_id, status="error", message=str(e))
+
+# 4. The Final Async Upload Route
+@app.post("/api/upload_statement")
+async def upload_statement(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    authorization: str = Header(None, alias="Authorization"),
+):
+    form = await request.form()
+    statements = form.getlist("statements") or form.getlist("statement")
+    statements = [s for s in statements if s and hasattr(s, "read")]
+
+    if not statements:
+        raise HTTPException(status_code=400, detail="At least one PDF file is required")
+    if len(statements) > MAX_STATEMENTS:
+        raise HTTPException(status_code=400, detail=f"Maximum {MAX_STATEMENTS} statements allowed")
+    if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+        raise HTTPException(
+            status_code=500,
+            detail="GOOGLE_API_KEY or GEMINI_API_KEY required for statement extraction (Docling + Gemini).",
+        )
+
+    # READ FILES INTO MEMORY NOW before the connection closes
+    file_data = []
+    for stmt in statements:
+        fname = stmt.filename or "statement.pdf"
+        if not fname.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"Only PDF files accepted. '{fname}' is not a PDF.")
+        content = await stmt.read(MAX_STATEMENT_FILE_SIZE_BYTES + 1)
+        if len(content) > MAX_STATEMENT_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Each PDF must be up to 5MB per file. '{fname}' is too large.",
+            )
+        file_data.append({
+            "filename": fname,
+            "content": content,
+            "content_sha256": _pdf_content_sha256_hex(content),
+        })
+
+    skipped_duplicates: list[dict] = []
+    user_id = _get_user_id_optional(authorization)
+    if user_id and file_data:
+        hashes = [f["content_sha256"] for f in file_data]
+        existing = _existing_statement_hashes_for_user(user_id, hashes)
+        if existing:
+            skipped_duplicates = [
+                {"filename": f["filename"]} for f in file_data if f["content_sha256"] in existing
+            ]
+            file_data = [f for f in file_data if f["content_sha256"] not in existing]
+
+    if not file_data:
+        names = [s["filename"] for s in skipped_duplicates]
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "All selected PDFs were already uploaded.",
+                "duplicate_filenames": names,
+            },
+        )
+
+    from .statement_job_dispatch import (
+        delete_pending_statement_specs,
+        publish_statement_job_qstash,
+        stage_statement_pdfs_for_qstash,
+        use_qstash_dispatch,
+    )
+
+    # 1. Create the job in Redis
+    job_id = await create_job(total_files=len(file_data))
+
+    # 2. Local: in-process background task. Vercel/production: QStash + staged PDFs in Supabase.
+    if use_qstash_dispatch():
+        try:
+            specs = await stage_statement_pdfs_for_qstash(supabase, file_data, user_id)
+        except Exception:
+            logger.exception("Staging PDFs for QStash failed for job %s", job_id)
+            await update_job(job_id, status="error", message="Failed to stage files for processing.")
+            raise HTTPException(
+                status_code=503,
+                detail="Could not prepare files for processing. Please try again.",
+            )
+        await update_job(
+            job_id,
+            pending_file_specs=specs,
+            user_id_for_worker=user_id,
+        )
+        try:
+            await publish_statement_job_qstash(job_id)
+        except Exception:
+            logger.exception("QStash publish failed for job %s", job_id)
+            await delete_pending_statement_specs(specs)
+            await update_job(job_id, status="error", message="Upload queue handoff failed.")
+            raise HTTPException(
+                status_code=503,
+                detail="Upload queue is unavailable right now. Please try again.",
+            )
+    else:
+        background_tasks.add_task(process_pdf_internal, job_id, file_data, user_id)
+
+    # 3. Return the ID immediately to React!
+    out: dict = {"job_id": job_id}
+    if skipped_duplicates:
+        out["skipped_duplicates"] = skipped_duplicates
+    return out
+
+
+@app.get("/api/upload_statement_status/{job_id}")
+async def upload_statement_status(job_id: str):
+    job = await get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Upload session expired or not found.")
+    return {
+        "status": job.get("status", "queued"),
+        "message": job.get("message", "Processing..."),
+        "current_file": job.get("current_file", 0),
+        "total_files": job.get("total_files", 0),
+    }
+
+
+@app.get("/api/upload_statement_result/{job_id}")
+async def upload_statement_result(job_id: str):
+    job = await get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Upload session expired or not found.")
+
+    status = job.get("status")
+    if status == "error":
+        raise HTTPException(status_code=500, detail=job.get("message", "Processing failed on the server."))
+    if status != "complete":
+        raise HTTPException(status_code=409, detail="Upload is still processing.")
+
+    result = job.get("result")
+    if result is None:
+        raise HTTPException(status_code=404, detail="Result payload is no longer available.")
+    return result
+
+
+from .statement_job_dispatch import QSTASH_WORKER_PATH, qstash_worker_url
+
+
+@app.post(QSTASH_WORKER_PATH)
+async def qstash_process_statement_job(request: Request):
+    """QStash-triggered worker: verify signature, load staged PDFs, run the same pipeline as BackgroundTasks."""
+    from qstash import Receiver
+    from qstash.errors import SignatureError
+
+    sig = request.headers.get("Upstash-Signature")
+    if not sig:
+        raise HTTPException(status_code=401, detail="Missing signature")
+
+    body = await request.body()
+    try:
+        body_str = body.decode("utf-8")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid body")
+
+    current = os.environ.get("QSTASH_CURRENT_SIGNING_KEY", "").strip()
+    nxt = os.environ.get("QSTASH_NEXT_SIGNING_KEY", "").strip()
+    if not current or not nxt:
+        logger.error("QStash signing keys missing (QSTASH_CURRENT_SIGNING_KEY / QSTASH_NEXT_SIGNING_KEY)")
+        raise HTTPException(status_code=500, detail="Server misconfiguration")
+
+    receiver = Receiver(current_signing_key=current, next_signing_key=nxt)
+    try:
+        receiver.verify(signature=sig, body=body_str, url=qstash_worker_url())
+    except SignatureError as e:
+        logger.warning("QStash signature verification failed: %s", e)
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    try:
+        payload = json.loads(body_str)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    job_id = payload.get("job_id")
+    if not job_id or not isinstance(job_id, str):
+        raise HTTPException(status_code=400, detail="Missing job_id")
+
+    job = await get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    specs = job.get("pending_file_specs") or []
+    user_wid = job.get("user_id_for_worker")
+    if not specs:
+        logger.error("QStash worker: job %s has no pending_file_specs", job_id)
+        raise HTTPException(status_code=400, detail="Job has no staged files")
+
+    try:
+        from .supabase_client import supabase as sb
+    except ImportError:
+        sb = None
+    if not sb:
+        await update_job(job_id, status="error", message="Storage is not configured.")
+        raise HTTPException(status_code=500, detail="Storage is not configured")
+
+    file_data = []
+    for spec in specs:
+        bucket = spec.get("bucket")
+        object_key = spec.get("object_key")
+        if not bucket or not object_key:
+            await update_job(job_id, status="error", message="Invalid staged file metadata.")
+            raise HTTPException(status_code=400, detail="Invalid staged file metadata")
+
+        def _download(b=bucket, k=object_key):
+            return sb.storage.from_(b).download(k)
+
+        try:
+            raw = await asyncio.to_thread(_download)
+        except Exception:
+            logger.exception("Failed to download staged PDF %s/%s", bucket, object_key)
+            from .statement_job_dispatch import delete_pending_statement_specs
+
+            await delete_pending_statement_specs(specs)
+            await update_job(job_id, status="error", message="Failed to load staged PDFs.")
+            raise HTTPException(status_code=500, detail="Failed to load staged PDFs")
+
+        file_data.append(
+            {
+                "filename": spec["filename"],
+                "content": raw,
+                "content_sha256": spec["content_sha256"],
+                "storage_path": spec["storage_path"],
+            }
+        )
+
+    await process_pdf_internal(job_id, file_data, user_wid)
+    return {"ok": True}
+
+
 # Prefer STATEMENT_PARSER from .env.local on disk (override any shell/dotenv quirk)
 _env_local_parser = None
 if env_local.exists():
@@ -77,8 +625,10 @@ if _env_local_gemini_model_pass1:
 if _env_local_gemini_model_pass2:
     os.environ["GEMINI_MODEL_PASS2"] = _env_local_gemini_model_pass2
 
+from .utils.gemini_model import get_configured_gemini_model_raw
+
 print(f"STATEMENT_PARSER in use (at startup): {os.environ.get('STATEMENT_PARSER', '(unset)')!r}")
-print(f"GEMINI_MODEL_PASS1 from .env.local file: {_env_local_gemini_model_pass1!r}")
+print(f"GEMINI_MODEL_PASS1 in use (at startup): {get_configured_gemini_model_raw()!r}")
 print(f"GEMINI_MODEL_PASS2 in use (at startup): {os.environ.get('GEMINI_MODEL_PASS2', '(unset)')!r}")
 
 import plaid
@@ -112,8 +662,6 @@ except ImportError:
     supabase = None
 
 load_dotenv()
-
-app = FastAPI()
 
 # CORS: localhost for dev, Vercel for deployed frontend (same-origin when both on Vercel)
 _cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -194,7 +742,7 @@ async def exchange_public_token(payload: dict = Body(...)):
 
 
 MAX_STATEMENTS = 12
-MAX_STATEMENT_FILE_SIZE_BYTES = 1 * 1024 * 1024  # 1MB per file
+MAX_STATEMENT_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB per file
 
 _CC_OUTFLOW_TYPES = frozenset({"purchase", "fee", "interest", "cash_advance"})
 _CC_INFLOW_TYPES = frozenset({"payment", "credit", "refund"})
@@ -238,6 +786,14 @@ def _is_balance_line(description: str | None) -> bool:
 def _strip_balance_lines(transactions: list[dict]) -> list[dict]:
     """Remove synthetic opening/closing balance entries the LLM sometimes produces."""
     return [t for t in transactions if not _is_balance_line(t.get("description"))]
+
+
+def _select_transactions_for_account_type(txns_list: list, account_type: str) -> list[dict]:
+    """Full ledger for accounts that persist transactions (depository/credit/loan + investment cash activity)."""
+    plaid_type = get_plaid_type(account_type) or "depository"
+    if get_generates_transactions(account_type) or plaid_type == "investment":
+        return txns_list
+    return []
 
 
 def _normalize_credit_card_signs(transactions: list[dict]) -> None:
@@ -425,8 +981,64 @@ def _validate_signs_from_running_balance(
     return corrections, validation_ok, mismatch_count, validated_count
 
 
-@app.post("/api/upload_statement")
-async def upload_statement(request: Request):
+def _validate_opening_plus_delta_equals_closing(
+    transactions: list[dict],
+    opening_balance: float | None,
+    closing_balance: float | None,
+    account_type: str,
+    filename: str = "",
+) -> tuple[bool, float | None, float | None]:
+    """Final balance check for depository/credit accounts.
+
+    Valid when opening_balance + sum(transaction amounts) ~= closing_balance.
+    Returns (delta_ok, transaction_delta, expected_closing).
+    """
+    if opening_balance is None or closing_balance is None or not transactions:
+        return True, None, None
+
+    plaid_type = get_plaid_type(account_type) or "depository"
+    if plaid_type not in {"depository", "credit"}:
+        return True, None, None
+
+    # Transactions are normalized to internal sign convention before this check.
+    # For credit accounts, balances extracted from statements are typically in
+    # statement convention, so flip them to internal convention for comparison.
+    opening_for_check = float(opening_balance)
+    closing_for_check = float(closing_balance)
+    if plaid_type == "credit":
+        opening_for_check = -opening_for_check
+        closing_for_check = -closing_for_check
+
+    transaction_delta = round(sum(float(t.get("amount", 0) or 0) for t in transactions), 2)
+    expected_closing = round(opening_for_check + transaction_delta, 2)
+    delta_ok = abs(expected_closing - closing_for_check) <= 0.02
+
+    if delta_ok:
+        logger.info(
+            "Statement delta validation passed for %s: opening=%.2f delta=%+.2f expected_closing=%.2f actual_closing=%.2f (plaid_type=%s)",
+            filename,
+            opening_for_check,
+            transaction_delta,
+            expected_closing,
+            closing_for_check,
+            plaid_type,
+        )
+    else:
+        logger.warning(
+            "Statement delta validation failed for %s: opening=%.2f delta=%+.2f expected_closing=%.2f actual_closing=%.2f (plaid_type=%s)",
+            filename,
+            opening_for_check,
+            transaction_delta,
+            expected_closing,
+            closing_for_check,
+            plaid_type,
+        )
+
+    return delta_ok, transaction_delta, expected_closing
+
+# Legacy synchronous endpoint kept for compatibility/testing.
+@app.post("/api/upload_statement_old")
+async def upload_statement_old(request: Request):
     """Accept 1–12 PDF bank statements, parse and return combined transactions."""
     logger.info("=== UPLOAD STATEMENT(S) ===")
     form = await request.form()
@@ -462,7 +1074,7 @@ async def upload_statement(request: Request):
             content = await stmt.read(MAX_STATEMENT_FILE_SIZE_BYTES + 1)
             if len(content) > MAX_STATEMENT_FILE_SIZE_BYTES:
                 logger.warning("Rejected: %s is larger than %d bytes", fname, MAX_STATEMENT_FILE_SIZE_BYTES)
-                return {"error": f"Each PDF must be up to 1MB per file. '{fname}' is too large."}
+                return {"error": f"Each PDF must be up to 5MB per file. '{fname}' is too large."}
             logger.info("Received %d bytes", len(content))
 
             storage_path = None
@@ -517,29 +1129,33 @@ async def upload_statement(request: Request):
                     account_id_from_stmt = meta.get("account_id")
                     opening_balance = meta.get("opening_balance")
                     closing_balance = meta.get("closing_balance")
+                    opening_cash_balance = meta.get("opening_cash_balance")
+                    closing_cash_balance = meta.get("closing_cash_balance")
                     currency = meta.get("currency") or "CAD"
                     start_date = meta.get("start_date")
                     end_date = meta.get("end_date")
                     account_type = meta.get("account_type") or "Chequing"
+                    plaid_type = get_plaid_type(account_type) or "depository"
+                    investment_account = plaid_type == "investment"
 
-                    transactions = txns_list if get_generates_transactions(account_type) else []
+                    transactions = _select_transactions_for_account_type(txns_list, account_type)
                     transactions = _strip_balance_lines(transactions)
 
                     running_ok = True
                     running_mismatch_count = 0
                     running_validated_count = 0
 
-                    if account_type != "Credit Card":
+                    if account_type == "Credit Card":
+                        _normalize_credit_card_signs(transactions)
+                    elif not investment_account:
                         _, running_ok, running_mismatch_count, running_validated_count = _validate_signs_from_running_balance(
                             transactions,
                             opening_balance,
                             filename=fname,
                         )
-                    if account_type == "Credit Card":
-                        _normalize_credit_card_signs(transactions)
 
                     closing_ok = True
-                    if transactions and closing_balance is not None:
+                    if not investment_account and transactions and closing_balance is not None:
                         last_rb = None
                         for t in reversed(transactions):
                             if t.get("running_balance") is not None:
@@ -548,7 +1164,25 @@ async def upload_statement(request: Request):
                         if last_rb is not None and abs(last_rb - closing_balance) > 0.02:
                             closing_ok = False
 
-                    validation_ok = running_ok and closing_ok
+                    delta_ok, _, _ = _validate_opening_plus_delta_equals_closing(
+                        transactions,
+                        opening_balance,
+                        closing_balance,
+                        account_type,
+                        filename=fname,
+                    )
+
+                    cash_delta_ok = True
+                    if investment_account and opening_cash_balance is not None and closing_cash_balance is not None:
+                        tx_sum = round(sum(float(t.get("amount", 0) or 0) for t in transactions), 2)
+                        cash_delta_ok = (
+                            abs(
+                                float(opening_cash_balance) + tx_sum - float(closing_cash_balance)
+                            )
+                            <= STATEMENT_BALANCE_TOLERANCE
+                        )
+
+                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok
 
                     # Stamp statement currency onto each extracted transaction for UI formatting
                     for t in transactions:
@@ -556,16 +1190,19 @@ async def upload_statement(request: Request):
                             t["currency"] = currency
 
                     logger.info(
-                        "LLM extraction: method=%s account_type=%s generates_txns=%s txns=%d holdings=%d validation_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s)",
+                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
                         extraction_method,
                         account_type,
                         get_generates_transactions(account_type),
+                        investment_account,
                         len(transactions),
                         len(holdings_list),
                         validation_ok,
+                        cash_delta_ok if investment_account else True,
                         running_mismatch_count,
                         running_validated_count,
                         closing_ok,
+                        delta_ok,
                     )
 
                     extra = {
@@ -573,11 +1210,15 @@ async def upload_statement(request: Request):
                         "running_mismatch_count": running_mismatch_count,
                         "running_validated_count": running_validated_count,
                         "closing_ok": closing_ok,
+                        "delta_ok": delta_ok,
+                        "cash_delta_ok": cash_delta_ok,
                         "extraction_method": extraction_method,
                         "provider": provider,
                         "account_id_from_stmt": account_id_from_stmt,
                         "opening_balance": opening_balance,
                         "closing_balance": closing_balance,
+                        "opening_cash_balance": opening_cash_balance,
+                        "closing_cash_balance": closing_cash_balance,
                         "currency": currency,
                         "start_date": start_date,
                         "end_date": end_date,
@@ -648,6 +1289,8 @@ async def upload_statement(request: Request):
                 "holdings": holdings_list,
                 "opening_balance": opening_balance,
                 "closing_balance": closing_balance,
+                "opening_cash_balance": extra.get("opening_cash_balance"),
+                "closing_cash_balance": extra.get("closing_cash_balance"),
                 "account_id": account_id_from_stmt,
                 "account_type": account_type,
                 "provider": provider,
@@ -659,6 +1302,7 @@ async def upload_statement(request: Request):
                 "retry_pass_2_used": pass2_used,
                 "retry_pass_3_used": pass3_used,
                 "validation_ok": extra.get("validation_ok"),
+                "cash_delta_ok": extra.get("cash_delta_ok"),
             })
         except Exception as e:
             logger.exception("Failed to parse %s: %s", fname, e)
@@ -1035,6 +1679,149 @@ def _detect_internal_transfers(db_transactions: list[dict], user_id: str) -> set
     return pairs
 
 
+_PAY_FROM_ACCOUNT_TYPES = frozenset({"depository", "loan"})
+_CREDIT_ACCOUNT_TYPE = "credit"
+
+
+def _detect_credit_card_payment_pairs(
+    db_transactions: list[dict],
+    account_type_by_id: dict[str, str],
+) -> set[tuple[str, str]]:
+    """
+    Pair bill payment from depository/loan (amount < 0) with credit-card payment credit (amount > 0),
+    same magnitude within ±3 days. Same greedy 1:1 matching as internal transfers.
+    Category is not changed here (e.g. stays Credit Card Payment on the checking leg).
+    """
+    from datetime import datetime as dt
+
+    def _to_date(v):
+        if not v:
+            return None
+        try:
+            return dt.strptime(str(v)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return None
+
+    by_account: dict[str, list[dict]] = defaultdict(list)
+    for t in db_transactions:
+        aid = t.get("account_id")
+        if aid:
+            by_account[str(aid)].append(t)
+
+    candidates: list[tuple[int, str, str]] = []
+    account_ids = list(by_account.keys())
+    for i, aid_a in enumerate(account_ids):
+        for aid_b in account_ids[i + 1 :]:  # noqa: E203
+            ta = account_type_by_id.get(str(aid_a), "")
+            tb = account_type_by_id.get(str(aid_b), "")
+            if ta in _PAY_FROM_ACCOUNT_TYPES and tb == _CREDIT_ACCOUNT_TYPE:
+                dep_id, cred_id = str(aid_a), str(aid_b)
+            elif tb in _PAY_FROM_ACCOUNT_TYPES and ta == _CREDIT_ACCOUNT_TYPE:
+                dep_id, cred_id = str(aid_b), str(aid_a)
+            else:
+                continue
+
+            dep_rows = by_account[dep_id]
+            cred_rows = by_account[cred_id]
+            dep_out = [
+                (t, float(t.get("amount", 0) or 0), _to_date(t.get("date")))
+                for t in dep_rows
+                if float(t.get("amount", 0) or 0) < 0
+            ]
+            cred_in = [
+                (t, float(t.get("amount", 0) or 0), _to_date(t.get("date")))
+                for t in cred_rows
+                if float(t.get("amount", 0) or 0) > 0
+            ]
+
+            for tout, amt_out, dout in dep_out:
+                if not dout:
+                    continue
+                tid_out = tout.get("id")
+                if not tid_out:
+                    continue
+                for tin, amt_in, din in cred_in:
+                    if not din:
+                        continue
+                    if abs(abs(amt_out) - amt_in) < 0.02:
+                        day_diff = abs((dout - din).days)
+                        if day_diff <= 3:
+                            tid_in = tin.get("id")
+                            if tid_in:
+                                candidates.append((day_diff, str(tid_out), str(tid_in)))
+
+    candidates.sort(key=lambda x: x[0])
+    used: set[str] = set()
+    pairs: set[tuple[str, str]] = set()
+    for _, tid_out, tid_in in candidates:
+        if tid_out in used or tid_in in used:
+            continue
+        used.add(tid_out)
+        used.add(tid_in)
+        pairs.add((tid_out, tid_in))
+    return pairs
+
+
+def _recompute_all_transfer_links(user_id: str) -> dict:
+    """
+    Clear flags, detect credit-card payment pairs (link + is_transfer; keep categories),
+    then self-transfers between remaining rows (Self-Transfer category).
+    """
+    global supabase
+    supabase.table("transactions").update(
+        {"is_transfer": False, "linked_transaction_id": None}
+    ).eq("user_id", user_id).execute()
+
+    acc_resp = supabase.table("accounts").select("id, account_type").eq("user_id", user_id).execute()
+    account_type_by_id = {
+        str(r["id"]): (r.get("account_type") or "").lower() for r in (acc_resp.data or [])
+    }
+
+    tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
+    db_transactions = getattr(tx_resp, "data", None) or []
+
+    cc_pairs = _detect_credit_card_payment_pairs(db_transactions, account_type_by_id)
+    cc_used: set[str] = set()
+    for a, b in cc_pairs:
+        cc_used.add(str(a))
+        cc_used.add(str(b))
+
+    remaining = [t for t in db_transactions if str(t.get("id")) not in cc_used]
+    self_pairs = _detect_internal_transfers(remaining, user_id)
+
+    for tid_out, tid_in in cc_pairs:
+        supabase.table("transactions").update(
+            {"is_transfer": True, "linked_transaction_id": tid_in}
+        ).eq("id", tid_out).eq("user_id", user_id).execute()
+        supabase.table("transactions").update(
+            {"is_transfer": True, "linked_transaction_id": tid_out}
+        ).eq("id", tid_in).eq("user_id", user_id).execute()
+
+    for tid_out, tid_in in self_pairs:
+        supabase.table("transactions").update(
+            {
+                "is_transfer": True,
+                "linked_transaction_id": tid_in,
+                "category": "Self-Transfer",
+                "needs_review": False,
+            }
+        ).eq("id", tid_out).eq("user_id", user_id).execute()
+        supabase.table("transactions").update(
+            {
+                "is_transfer": True,
+                "linked_transaction_id": tid_out,
+                "category": "Self-Transfer",
+                "needs_review": False,
+            }
+        ).eq("id", tid_in).eq("user_id", user_id).execute()
+
+    return {
+        "credit_card_pairs": len(cc_pairs),
+        "self_transfer_pairs": len(self_pairs),
+        "transfer_pair_count": len(cc_pairs) + len(self_pairs),
+    }
+
+
 def _get_or_create_import_account(user_id: str) -> str:
     """Get or create a default 'Imported Statements' account for PDF uploads. Returns account_id (uuid)."""
     resp = supabase.table("accounts").select("id").eq("user_id", user_id).execute()
@@ -1054,10 +1841,15 @@ def _get_or_create_import_account(user_id: str) -> str:
 
 
 def _normalize_account_number(account_number: str | None) -> str:
-    """Normalize account number by removing spaces and hyphens so '1 3008701' matches '13008701'."""
+    """Normalize account number to alphanumeric only for stable matching.
+
+    This collapses masked forms like '############4756', '****4756', or
+    '•••• 4756' to '4756', while preserving true alphanumeric IDs.
+    """
     if not account_number or not isinstance(account_number, str):
         return ""
-    return "".join(account_number.strip().split()).replace("-", "")
+    cleaned = "".join(ch for ch in account_number.strip() if ch.isalnum())
+    return cleaned.upper()
 
 
 def _get_or_create_account_by_provider_and_number(
@@ -1138,11 +1930,14 @@ def _normalize_uuid(value) -> str | None:
 
 
 def _get_latest_balance_per_account_currency(user_id: str) -> dict:
-    """Return dict account_id -> list of { amount, currency, date } (latest by date per account/currency)."""
+    """Return dict account_id -> list of { amount, currency, date } (latest by date per account/currency).
+
+    Uses statement-kind rows only: period open/close as on the statement (chequing/CC balance or brokerage NAV), not cash-only snapshots.
+    """
     try:
         bal_resp = supabase.table("balances").select("account_id, amount, currency, date").eq(
             "user_id", user_id
-        ).order("date", desc=True).execute()
+        ).eq("balance_kind", "statement").order("date", desc=True).execute()
         rows = getattr(bal_resp, "data", None) or []
     except Exception:
         return {}
@@ -1186,6 +1981,17 @@ VALIDATABLE_STATEMENT_ACCOUNT_TYPES = {"depository", "credit"}
 STATEMENT_BALANCE_TOLERANCE = 0.02
 
 
+def _balance_rows_for_kind(rows: list[dict], kind: str) -> list[dict]:
+    """Filter balance rows by balance_kind (missing kind treated as statement)."""
+    want = (kind or "statement").strip().lower()
+    out: list[dict] = []
+    for r in rows or []:
+        rk = (r.get("balance_kind") or "statement").strip().lower()
+        if rk == want:
+            out.append(r)
+    return out
+
+
 def _to_float_or_none(value) -> float | None:
     if value is None:
         return None
@@ -1195,9 +2001,22 @@ def _to_float_or_none(value) -> float | None:
         return None
 
 
-def _statement_open_close_from_balances(statement: dict, statement_balance_rows: list[dict]) -> tuple[float | None, float | None]:
-    """Return (opening, closing) from balances rows for a statement."""
-    if not statement_balance_rows:
+def _statement_open_close_from_balances(
+    statement: dict,
+    statement_balance_rows: list[dict],
+    *,
+    balance_kind_filter: str | None = "statement",
+) -> tuple[float | None, float | None]:
+    """Return (opening, closing) from balances rows for a statement.
+
+    balance_kind_filter: if set, only rows with this balance_kind are used (default statement for bank/CC).
+    """
+    rows = (
+        _balance_rows_for_kind(statement_balance_rows, balance_kind_filter)
+        if balance_kind_filter
+        else list(statement_balance_rows or [])
+    )
+    if not rows:
         return None, None
 
     start_date = str(statement.get("start_date")) if statement.get("start_date") else None
@@ -1206,7 +2025,7 @@ def _statement_open_close_from_balances(statement: dict, statement_balance_rows:
     opening = None
     closing = None
     sorted_rows = sorted(
-        statement_balance_rows,
+        rows,
         key=lambda r: str(r.get("date") or ""),
     )
 
@@ -1259,11 +2078,19 @@ def _annotate_statement_validation(
         account_id = _normalize_uuid(statement.get("account_id"))
         account_type = account_type_by_id.get(account_id, "")
         applicable = account_type in VALIDATABLE_STATEMENT_ACCOUNT_TYPES
+        is_investment = account_type == "investment"
 
         statement_txs = tx_by_stmt.get(sid, [])
-        all_reviewed = bool(applicable and all(not bool(tx.get("needs_review")) for tx in statement_txs))
+        stmt_bal_rows = balances_by_stmt.get(sid, [])
 
-        opening, closing = _statement_open_close_from_balances(statement, balances_by_stmt.get(sid, []))
+        if applicable:
+            all_reviewed = all(not bool(tx.get("needs_review")) for tx in statement_txs)
+        elif is_investment and statement_txs:
+            all_reviewed = all(not bool(tx.get("needs_review")) for tx in statement_txs)
+        else:
+            all_reviewed = True
+
+        opening, closing = _statement_open_close_from_balances(statement, stmt_bal_rows)
         tx_sum = sum(_to_float_or_none(tx.get("amount")) or 0.0 for tx in statement_txs)
         balances_reconciled = bool(
             applicable
@@ -1272,10 +2099,28 @@ def _annotate_statement_validation(
             and abs((opening + tx_sum) - closing) <= STATEMENT_BALANCE_TOLERANCE
         )
 
+        opening_cash, closing_cash = _statement_open_close_from_balances(
+            statement, stmt_bal_rows, balance_kind_filter="cash_only"
+        )
+        cash_validation_applicable = bool(
+            is_investment
+            and opening_cash is not None
+            and closing_cash is not None
+        )
+        cash_balances_reconciled = bool(
+            cash_validation_applicable
+            and abs((opening_cash + tx_sum) - closing_cash) <= STATEMENT_BALANCE_TOLERANCE
+        )
+
         statement["validation_applicable"] = applicable
         statement["balances_reconciled"] = balances_reconciled
+        statement["cash_validation_applicable"] = cash_validation_applicable
+        statement["cash_balances_reconciled"] = cash_balances_reconciled
         statement["all_reviewed"] = all_reviewed
-        statement["fully_validated"] = bool(balances_reconciled and all_reviewed)
+        statement["fully_validated"] = bool(
+            (applicable and balances_reconciled and all_reviewed)
+            or (cash_validation_applicable and cash_balances_reconciled and all_reviewed)
+        )
 
 
 def _get_user_from_token(authorization: str = None):
@@ -1312,6 +2157,69 @@ def _get_user_from_token(authorization: str = None):
     raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def _get_user_id_optional(authorization: str | None) -> str | None:
+    try:
+        return _get_user_from_token(authorization)
+    except HTTPException:
+        return None
+
+
+def _pdf_content_sha256_hex(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _split_storage_bucket_and_key(raw_path: str | None, default_bucket: str) -> tuple[str, str | None]:
+    """Normalize storage reference into (bucket, object_key).
+
+    Supports legacy "bucket/key" storage_path and newer "key"-only storage_path.
+    """
+    bucket = (default_bucket or "statement-pdfs").strip() or "statement-pdfs"
+    if not isinstance(raw_path, str):
+        return bucket, None
+    value = raw_path.strip().lstrip("/")
+    if not value:
+        return bucket, None
+    prefix = f"{bucket}/"
+    if value.startswith(prefix):
+        return bucket, value[len(prefix):] or None
+    return bucket, value
+
+
+def _delete_statement_storage_object(raw_storage_path: str | None) -> tuple[bool, str | None]:
+    """Best-effort delete of a statement PDF object from Supabase Storage."""
+    if not supabase:
+        return False, "Database not configured"
+    storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
+    bucket_name, object_key = _split_storage_bucket_and_key(raw_storage_path, storage_bucket_name)
+    if not object_key:
+        return False, "Missing storage object key"
+    try:
+        supabase.storage.from_(bucket_name).remove([object_key])
+        return True, None
+    except Exception as e:
+        logger.warning("Failed to delete statement PDF object '%s/%s': %s", bucket_name, object_key, e)
+        return False, str(e)
+
+
+def _existing_statement_hashes_for_user(user_id: str, hashes: list[str]) -> set[str]:
+    if not supabase or not hashes:
+        return set()
+    uniq = list(dict.fromkeys(hashes))
+    try:
+        resp = (
+            supabase.table("user_statements")
+            .select("content_sha256")
+            .eq("user_id", user_id)
+            .in_("content_sha256", uniq)
+            .execute()
+        )
+        rows = getattr(resp, "data", None) or []
+        return {str(r["content_sha256"]).lower() for r in rows if r.get("content_sha256")}
+    except Exception as e:
+        logger.warning("Duplicate PDF check failed (continuing without filter): %s", e)
+        return set()
+
+
 @app.post("/api/save_analysis")
 async def save_analysis(
     payload: dict = Body(...),
@@ -1329,6 +2237,19 @@ async def get_categories():
     path = _ROOT / "api" / "data" / "categories.json"
     if not path.exists():
         raise HTTPException(status_code=500, detail="categories.json not found")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/exchange_rates")
+async def get_exchange_rates():
+    """Static CAD-based FX table for display conversion; replace with API later if needed. No auth required."""
+    path = _ROOT / "api" / "data" / "exchange_rates.json"
+    if not path.exists():
+        raise HTTPException(status_code=500, detail="exchange_rates.json not found")
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
@@ -1431,6 +2352,128 @@ async def patch_transaction_category(
     if similar_amount is not None:
         out["similar_amount"] = similar_amount
     return out
+
+
+@app.patch("/api/transactions/{transaction_id}/reviewed")
+async def patch_transaction_reviewed(
+    transaction_id: str,
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Clear needs_review without changing category or tags (user confirmed the row is correct)."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    existing = (
+        supabase.table("transactions")
+        .select("id")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not (getattr(existing, "data", None) or []):
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    supabase.table("transactions").update({"needs_review": False}).eq("id", transaction_id).eq(
+        "user_id", user_id
+    ).execute()
+
+    updated_row = (
+        supabase.table("transactions")
+        .select("*")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    updated_data = getattr(updated_row, "data", None) or []
+    transaction = _db_txn_to_analysis(updated_data[0]) if updated_data else None
+    if transaction is not None:
+        transaction["needs_review"] = False
+    return {"transaction": transaction}
+
+
+_SELF_TRANSFER_CATEGORY_NAME = "Self-Transfer"
+_UNCATEGORIZED_FALLBACK = "Uncategorized"
+
+
+@app.post("/api/transactions/{transaction_id}/unlink-self-transfer")
+async def unlink_self_transfer_pair(
+    transaction_id: str,
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Remove self-transfer pairing on both legs (is_transfer, link, category reset).
+
+    Only allowed when the row is a system-detected self-transfer (category Self-Transfer).
+    Credit-card payment pairs keep their categories and are not unlinked here.
+    """
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    a_resp = (
+        supabase.table("transactions")
+        .select("id, user_id, is_transfer, linked_transaction_id, category")
+        .eq("id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    a_rows = getattr(a_resp, "data", None) or []
+    if not a_rows:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    row_a = a_rows[0]
+    if not row_a.get("is_transfer"):
+        raise HTTPException(status_code=400, detail="Transaction is not marked as a transfer")
+    partner_id = row_a.get("linked_transaction_id")
+    if not partner_id:
+        raise HTTPException(status_code=400, detail="No linked transaction to unlink")
+    cat_a = (row_a.get("category") or "").strip()
+    if cat_a != _SELF_TRANSFER_CATEGORY_NAME:
+        raise HTTPException(
+            status_code=400,
+            detail="Only Self-Transfer pairs can be unlinked here; credit card payment links are managed separately.",
+        )
+
+    b_resp = (
+        supabase.table("transactions")
+        .select("id, user_id, is_transfer, linked_transaction_id, category")
+        .eq("id", str(partner_id))
+        .eq("user_id", user_id)
+        .execute()
+    )
+    b_rows = getattr(b_resp, "data", None) or []
+    if not b_rows:
+        raise HTTPException(status_code=404, detail="Linked transaction not found")
+    row_b = b_rows[0]
+    b_link = row_b.get("linked_transaction_id")
+    if b_link and str(b_link) != str(transaction_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Transfer link is inconsistent; refresh data or contact support.",
+        )
+
+    unlink_payload = {
+        "is_transfer": False,
+        "linked_transaction_id": None,
+        "category": _UNCATEGORIZED_FALLBACK,
+        "needs_review": True,
+    }
+    supabase.table("transactions").update(unlink_payload).eq("id", transaction_id).eq("user_id", user_id).execute()
+    supabase.table("transactions").update(unlink_payload).eq("id", str(partner_id)).eq("user_id", user_id).execute()
+
+    ids = [transaction_id, str(partner_id)]
+    out_rows: list[dict] = []
+    for tid in ids:
+        r = (
+            supabase.table("transactions")
+            .select("*")
+            .eq("id", tid)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        data = getattr(r, "data", None) or []
+        if data:
+            out_rows.append(_db_txn_to_analysis(data[0]))
+    return {"transactions": out_rows}
 
 
 @app.patch("/api/transactions/{transaction_id}/tags")
@@ -1717,7 +2760,8 @@ async def save_statements(
     authorization: str = Header(None, alias="Authorization"),
 ):
     """Save uploaded statement(s) to Supabase. Get-or-create account by (provider, account_number);
-    branch insertion logic by Plaid type: investment -> balances + holdings, others -> balances + transactions."""
+    branch insertion logic by Plaid type: investment -> balances + holdings + cash-ledger transactions;
+    others -> balances + full transaction ledger."""
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
@@ -1725,6 +2769,7 @@ async def save_statements(
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="statements must be a non-empty list of {filename, transactions, provider?, account_id?, ...}")
     try:
+        storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
         all_txn_rows = []
         cat_count = 0
         flagged_count = 0
@@ -1762,20 +2807,32 @@ async def save_statements(
                 user_id, provider, account_number, account_subtype, currency
             )
 
-            if get_generates_transactions(account_subtype):
+            if get_generates_transactions(account_subtype) or (
+                plaid_type == "investment" and txns
+            ):
                 c, f = _apply_categorization(txns)
                 cat_count += c
                 flagged_count += f
 
-            stmt_ins = supabase.table("user_statements").insert({
+            _, normalized_storage_key = _split_storage_bucket_and_key(
+                item.get("storage_path"),
+                storage_bucket_name,
+            )
+            stmt_row = {
                 "user_id": user_id,
                 "account_id": account_id,
                 "filename": fn,
-                "storage_path": item.get("storage_path"),
+                "storage_path": normalized_storage_key,
                 "start_date": start_date,
                 "end_date": end_date,
                 "provider": provider,
-            }).execute()
+            }
+            raw_hash = item.get("content_sha256")
+            if isinstance(raw_hash, str):
+                h = raw_hash.strip().lower()
+                if len(h) == 64 and re.fullmatch(r"[0-9a-f]{64}", h):
+                    stmt_row["content_sha256"] = h
+            stmt_ins = supabase.table("user_statements").insert(stmt_row).execute()
             if not stmt_ins or not (getattr(stmt_ins, "data", None) and len(stmt_ins.data) > 0):
                 raise RuntimeError("Failed to insert user_statement: no data returned from Supabase")
             statement_id = stmt_ins.data[0]["id"]
@@ -1783,6 +2840,13 @@ async def save_statements(
             # Event-driven ledger: insert point-in-time balances (all account types)
             opening_balance = item.get("opening_balance")
             closing_balance = item.get("closing_balance")
+            if plaid_type == "credit":
+                # Flip statement-sign convention to our internal convention.
+                # Example: statement -3.56 (customer credit) becomes +3.56 in DB.
+                if opening_balance is not None:
+                    opening_balance = -float(opening_balance)
+                if closing_balance is not None:
+                    closing_balance = -float(closing_balance)
             if start_date and opening_balance is not None:
                 supabase.table("balances").insert({
                     "user_id": user_id,
@@ -1791,6 +2855,7 @@ async def save_statements(
                     "amount": round(float(opening_balance), 2),
                     "currency": currency or "CAD",
                     "date": start_date,
+                    "balance_kind": "statement",
                 }).execute()
             if end_date and closing_balance is not None:
                 supabase.table("balances").insert({
@@ -1800,7 +2865,32 @@ async def save_statements(
                     "amount": round(float(closing_balance), 2),
                     "currency": currency or "CAD",
                     "date": end_date,
+                    "balance_kind": "statement",
                 }).execute()
+
+            opening_cash = item.get("opening_cash_balance")
+            closing_cash = item.get("closing_cash_balance")
+            if plaid_type == "investment":
+                if start_date and opening_cash is not None:
+                    supabase.table("balances").insert({
+                        "user_id": user_id,
+                        "account_id": account_id,
+                        "statement_id": statement_id,
+                        "amount": round(float(opening_cash), 2),
+                        "currency": currency or "CAD",
+                        "date": start_date,
+                        "balance_kind": "cash_only",
+                    }).execute()
+                if end_date and closing_cash is not None:
+                    supabase.table("balances").insert({
+                        "user_id": user_id,
+                        "account_id": account_id,
+                        "statement_id": statement_id,
+                        "amount": round(float(closing_cash), 2),
+                        "currency": currency or "CAD",
+                        "date": end_date,
+                        "balance_kind": "cash_only",
+                    }).execute()
 
             # Investment accounts: insert holdings; integrity check first
             if plaid_type == "investment":
@@ -1831,8 +2921,8 @@ async def save_statements(
                         "is_cash_equivalent": bool(h.get("is_cash_equivalent", False)),
                     }).execute()
 
-            # Depository / credit / loan: process transactions if applicable, skip holdings
-            if not get_generates_transactions(account_subtype):
+            # Depository / credit / loan: full ledger; investment keeps full cash-ledger txns from parse
+            if not get_generates_transactions(account_subtype) and plaid_type != "investment":
                 txns = []
 
             txns = _strip_balance_lines(txns)
@@ -1871,25 +2961,8 @@ async def save_statements(
                 ignore_duplicates=True,
             ).execute()
 
-        # Recompute internal transfer links for this user (avoid stale links on re-upload/delete).
-        # 1) Clear all previous transfer marks/links for the user
-        supabase.table("transactions").update(
-            {"is_transfer": False, "linked_transaction_id": None}
-        ).eq("user_id", user_id).execute()
-
-        # 2) Fetch all user transactions and run transfer detection
-        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
-        db_transactions = getattr(tx_resp, "data", None) or []
-        transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
-
-        # 3) Persist 1:1 links + transfer marker on both sides
-        for tid_out, tid_in in transfer_pairs:
-            supabase.table("transactions").update(
-                {"is_transfer": True, "linked_transaction_id": tid_in, "category": "Self-Transfer"}
-            ).eq("id", tid_out).eq("user_id", user_id).execute()
-            supabase.table("transactions").update(
-                {"is_transfer": True, "linked_transaction_id": tid_out, "category": "Self-Transfer"}
-            ).eq("id", tid_in).eq("user_id", user_id).execute()
+        # Recompute transfer links (CC payments first, preserve category; then self-transfers).
+        link_summary = _recompute_all_transfer_links(user_id)
 
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
         db_transactions = getattr(tx_resp, "data", None) or []
@@ -1899,7 +2972,9 @@ async def save_statements(
         processing_summary = {
             "transactions_categorized": cat_count,
             "flagged_for_review": flagged_count,
-            "transfers_detected": len(transfer_pairs),
+            "transfers_detected": link_summary["transfer_pair_count"],
+            "credit_card_pairs": link_summary["credit_card_pairs"],
+            "self_transfer_pairs": link_summary["self_transfer_pairs"],
         }
         return {
             "status": "saved",
@@ -1911,6 +2986,58 @@ async def save_statements(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/statements/{statement_id}/pdf-url")
+async def get_statement_pdf_url(
+    statement_id: str,
+    expires_in: int = 300,
+    authorization: str = Header(None, alias="Authorization"),
+):
+    """Return short-lived signed URL for a statement PDF owned by the authenticated user."""
+    user_id = _get_user_from_token(authorization)
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database not configured")
+
+    # Guardrails for short-lived links only.
+    ttl = max(60, min(int(expires_in or 300), 3600))
+    storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
+
+    try:
+        stmt_resp = (
+            supabase.table("user_statements")
+            .select("id, user_id, storage_path")
+            .eq("id", statement_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(stmt_resp, "data", None) or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="Statement not found")
+
+        bucket_name, object_key = _split_storage_bucket_and_key(
+            rows[0].get("storage_path"),
+            storage_bucket_name,
+        )
+        if not object_key:
+            raise HTTPException(status_code=404, detail="No stored PDF found for this statement")
+
+        signed = supabase.storage.from_(bucket_name).create_signed_url(object_key, ttl)
+        signed_url = None
+        if isinstance(signed, dict):
+            signed_url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
+        if not signed_url:
+            raise HTTPException(status_code=500, detail="Failed to create signed URL for statement PDF")
+
+        return {
+            "url": signed_url,
+            "expires_in": ttl,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/statements/{statement_id}")
 async def delete_statement(statement_id: str, authorization: str = Header(None, alias="Authorization")):
     """Delete a statement by id (cascades to transactions). If it was the last statement for that account, delete the account too. Recompute and return updated analysis."""
@@ -1918,11 +3045,20 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
-        # Fetch statement to get account_id before deleting (and ensure it exists and belongs to user)
-        get_resp = supabase.table("user_statements").select("account_id").eq("id", statement_id).eq("user_id", user_id).execute()
+        # Fetch statement metadata before deleting (and ensure it exists and belongs to user)
+        get_resp = (
+            supabase.table("user_statements")
+            .select("account_id, storage_path")
+            .eq("id", statement_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
         if not get_resp.data or len(get_resp.data) == 0:
             raise HTTPException(status_code=404, detail="Statement not found")
         account_id = get_resp.data[0].get("account_id")
+        storage_path = get_resp.data[0].get("storage_path")
+
+        pdf_deleted, pdf_delete_error = _delete_statement_storage_object(storage_path)
 
         supabase.table("user_statements").delete().eq("id", statement_id).eq("user_id", user_id).execute()
 
@@ -1947,12 +3083,21 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
         analysis = analyze_transactions(all_transactions)
-        return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
+        bal_full = supabase.table("balances").select("*").eq("user_id", user_id).order("date", desc=True).execute()
+        balances_out = getattr(bal_full, "data", None) or []
+        return {
+            "statements": statements,
+            "transactions": all_transactions,
+            "analysis": analysis,
+            "balances": balances_out,
+            "pdf_deleted": pdf_deleted,
+            "pdf_delete_error": pdf_delete_error,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1968,12 +3113,26 @@ async def bulk_delete_statements(body: dict = Body(...), authorization: str = He
         raise HTTPException(status_code=400, detail="statement_ids must be a non-empty list")
     try:
         affected_account_ids = set()
+        pdf_deleted_count = 0
+        pdf_delete_failures = []
         for sid in statement_ids:
-            get_resp = supabase.table("user_statements").select("account_id").eq("id", sid).eq("user_id", user_id).execute()
+            get_resp = (
+                supabase.table("user_statements")
+                .select("account_id, storage_path")
+                .eq("id", sid)
+                .eq("user_id", user_id)
+                .execute()
+            )
             if get_resp.data and len(get_resp.data) > 0:
                 acc_id = get_resp.data[0].get("account_id")
+                storage_path = get_resp.data[0].get("storage_path")
                 if acc_id:
                     affected_account_ids.add(acc_id)
+                pdf_deleted, pdf_delete_error = _delete_statement_storage_object(storage_path)
+                if pdf_deleted:
+                    pdf_deleted_count += 1
+                elif pdf_delete_error:
+                    pdf_delete_failures.append({"statement_id": sid, "reason": pdf_delete_error})
                 supabase.table("user_statements").delete().eq("id", sid).eq("user_id", user_id).execute()
 
         for account_id in affected_account_ids:
@@ -1996,12 +3155,22 @@ async def bulk_delete_statements(body: dict = Body(...), authorization: str = He
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
         analysis = analyze_transactions(all_transactions)
-        return {"statements": statements, "transactions": all_transactions, "analysis": analysis, "deleted_count": len(statement_ids)}
+        bal_full = supabase.table("balances").select("*").eq("user_id", user_id).order("date", desc=True).execute()
+        balances_out = getattr(bal_full, "data", None) or []
+        return {
+            "statements": statements,
+            "transactions": all_transactions,
+            "analysis": analysis,
+            "balances": balances_out,
+            "deleted_count": len(statement_ids),
+            "pdf_deleted_count": pdf_deleted_count,
+            "pdf_delete_failures": pdf_delete_failures,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2030,12 +3199,14 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
         analysis = analyze_transactions(all_transactions)
-        return {"statements": statements, "transactions": all_transactions, "analysis": analysis}
+        bal_full = supabase.table("balances").select("*").eq("user_id", user_id).order("date", desc=True).execute()
+        balances_out = getattr(bal_full, "data", None) or []
+        return {"statements": statements, "transactions": all_transactions, "analysis": analysis, "balances": balances_out}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2043,45 +3214,29 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
 @app.post("/api/detect-internal-transfers")
 async def detect_internal_transfers(authorization: str = Header(None, alias="Authorization")):
     """
-    Recompute internal transfer detection for the authenticated user.
-    - Clears previous is_transfer + linked_transaction_id
-    - Runs _detect_internal_transfers over all user transactions
-    - Persists 1:1 links on both sides
-    Returns updated transactions + analysis + summary counts.
+    Recompute transfer links for the authenticated user:
+    credit-card payment pairs (linked, categories unchanged), then self-transfers (Self-Transfer).
     """
     user_id = _get_user_from_token(authorization)
     if not supabase:
         raise HTTPException(status_code=500, detail="Database not configured")
     try:
-        # Clear all previous transfer marks/links
-        supabase.table("transactions").update(
-            {"is_transfer": False, "linked_transaction_id": None}
-        ).eq("user_id", user_id).execute()
-
-        # Re-detect pairs based on current ledger
-        tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).execute()
-        db_transactions = getattr(tx_resp, "data", None) or []
-        transfer_pairs = _detect_internal_transfers(db_transactions, user_id)
-
-        for tid_out, tid_in in transfer_pairs:
-            supabase.table("transactions").update(
-                {"is_transfer": True, "linked_transaction_id": tid_in, "category": "Self-Transfer"}
-            ).eq("id", tid_out).eq("user_id", user_id).execute()
-            supabase.table("transactions").update(
-                {"is_transfer": True, "linked_transaction_id": tid_out, "category": "Self-Transfer"}
-            ).eq("id", tid_in).eq("user_id", user_id).execute()
+        link_summary = _recompute_all_transfer_links(user_id)
 
         # Return updated transactions + recomputed analysis
         tx_resp = supabase.table("transactions").select("*").eq("user_id", user_id).order("date", desc=False).execute()
         db_transactions = getattr(tx_resp, "data", None) or []
         all_transactions = [_db_txn_to_analysis(t) for t in db_transactions]
         analysis = analyze_transactions(all_transactions)
+        n_pairs = link_summary["transfer_pair_count"]
         return {
             "transactions": all_transactions,
             "analysis": analysis,
             "processing_summary": {
-                "transfers_detected": len(transfer_pairs),
-                "transactions_marked_transfer": len(transfer_pairs) * 2,
+                "transfers_detected": n_pairs,
+                "credit_card_pairs": link_summary["credit_card_pairs"],
+                "self_transfer_pairs": link_summary["self_transfer_pairs"],
+                "transactions_marked_transfer": n_pairs * 2,
             },
         }
     except Exception as e:

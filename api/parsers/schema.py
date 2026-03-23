@@ -32,6 +32,14 @@ class StatementFields(BaseModel):
     account_id: str | None = Field(default=None, description="Account number or account ID from the statement")
     opening_balance: float | None = Field(default=None, description="Balance at start of statement period")
     closing_balance: float | None = Field(default=None, description="Balance at end of statement period")
+    opening_cash_balance: float | None = Field(
+        default=None,
+        description="Investment/brokerage only: cash balance at period start (not NAV). Null if not on statement.",
+    )
+    closing_cash_balance: float | None = Field(
+        default=None,
+        description="Investment/brokerage only: cash balance at period end (not NAV). Null if not on statement.",
+    )
     currency: str = Field(default="CAD", description="Currency code (e.g. CAD, USD)")
     start_date: str | None = Field(default=None, description="Statement period start date in YYYY-MM-DD format")
     end_date: str | None = Field(default=None, description="Statement period end date in YYYY-MM-DD format")
@@ -80,7 +88,10 @@ class HoldingItem(BaseModel):
 class StatementExtraction(StatementFields):
     """Combined LLM output: statement metadata + transactions + holdings."""
 
-    transactions: list[TransactionItem] = Field(default_factory=list, description="List of all transactions in the statement")
+    transactions: list[TransactionItem] = Field(
+        default_factory=list,
+        description="Bank/credit: full ledger. Investment/brokerage: all lines that change account cash (deposits, withdrawals, trades, dividends to cash, fees, interest, transfers, etc.).",
+    )
     holdings: list[HoldingItem] = Field(default_factory=list, description="Itemized holding positions for investment/brokerage accounts; empty for depository/credit/loan accounts")
 
 
@@ -97,5 +108,5 @@ def get_allowed_account_types_prompt_suffix() -> str:
 def get_allowed_category_names_prompt_suffix() -> str:
     """Allowed category names for LLM prompt (from categories.json or fallback). Does not include 'Uncategorized'."""
     if get_category_names is None:
-        return "Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Financial & Investing, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
+        return "Bank & broker fees, Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Securities Trading, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
     return ", ".join(get_category_names())

@@ -79,6 +79,14 @@ class StatementFields(BaseModel):
     account_id: str | None = Field(default=None, description="Account number or account ID from the statement")
     opening_balance: float | None = Field(default=None, description="Balance at start of statement period")
     closing_balance: float | None = Field(default=None, description="Balance at end of statement period")
+    opening_cash_balance: float | None = Field(
+        default=None,
+        description="Investment/brokerage only: cash at period start (not NAV). Null if not stated.",
+    )
+    closing_cash_balance: float | None = Field(
+        default=None,
+        description="Investment/brokerage only: cash at period end (not NAV). Null if not stated.",
+    )
     currency: str = Field(default="CAD", description="Currency code (e.g. CAD, USD)")
     start_date: str | None = Field(default=None, description="Statement period start date in YYYY-MM-DD format")
     end_date: str | None = Field(default=None, description="Statement period end date in YYYY-MM-DD format")
@@ -127,7 +135,10 @@ class HoldingItem(BaseModel):
 class StatementExtraction(StatementFields):
     """Combined LLM output: statement metadata + transactions + holdings."""
 
-    transactions: list[TransactionItem] = Field(default_factory=list, description="List of all transactions in the statement")
+    transactions: list[TransactionItem] = Field(
+        default_factory=list,
+        description="Bank/credit: full ledger. Investment/brokerage: all cash-balance-affecting activity (deposits, withdrawals, trades, dividends, fees, interest, transfers, etc.).",
+    )
     holdings: list[HoldingItem] = Field(default_factory=list, description="Itemized holding positions for investment/brokerage accounts; empty for depository/credit/loan accounts")
 
 
@@ -155,7 +166,7 @@ def _allowed_account_types_prompt_suffix() -> str:
 def _allowed_category_names_prompt_suffix() -> str:
     """Allowed category names for LLM prompt (from categories.json). Does not include 'Uncategorized' (allowed separately in prompt)."""
     if get_category_names is None:
-        return "Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Financial & Investing, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
+        return "Bank & broker fees, Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Securities Trading, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
     return ", ".join(get_category_names())
 
 
@@ -173,6 +184,7 @@ Extract the following:
    - start_date: First day of the statement period in YYYY-MM-DD format.
    - end_date: Last day of the statement period in YYYY-MM-DD format.
    - account_type: You MUST use exactly one of these values (pick the closest match to what the document says): {_allowed_account_types_prompt_suffix()}. Do not use any other wording (e.g. use "TFSA" not "Tax-Free Savings", use "RRSP" not "Registered Retirement Savings Plan").
+   - opening_cash_balance / closing_cash_balance: For investment/brokerage accounts ONLY, if the statement shows period start/end cash (cash balance, not total portfolio value), extract those numeric values. Must match opening_balance/closing_balance currency. Use null if not stated or unclear.
 
 2) Every transaction in the statement as a list. These are transaction line items from a bank or brokerage statement (not from a live feed with clean merchant names). Descriptions may be abbreviated, include reference numbers, ATM/terminal IDs, or payee names, and format varies by institution—use this context when assigning categories.
    For each transaction provide: date (YYYY-MM-DD), description (text), amount, transaction_type, category, confidence_score (0-1).
@@ -184,6 +196,7 @@ Extract the following:
    - confidence_score: Your confidence in the category assignment, a number from 0 to 1.
    - running_balance: The running/cumulative account balance shown on the SAME ROW as this transaction (e.g. in a "Balance" column). Copy the EXACT value printed in the statement. Do NOT calculate or derive this value. If no per-row balance is shown for this transaction, use null.
    If there are no transactions, return an empty list.
+   INVESTMENT/BROKERAGE ACCOUNTS (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC): In transactions[], include every line from the cash/activity ledger that changes cash balance (deposits, withdrawals, bank transfers, buys, sells, dividends paid to cash, fees, interest, etc.). Use signed amounts (negative = cash out, positive = cash in). Classify transaction_type appropriately (e.g. purchase for buys, deposit/withdrawal/transfer for bank movements). If the statement shows a per-row cash balance, put it in running_balance; if only portfolio value is shown per row, use null for running_balance. Holdings in section (3) still capture positions.
 
 3) For investment/brokerage accounts (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC), extract every holding position as a list. For each holding provide:
    - asset_symbol: Ticker symbol (e.g. XEQT, VFV, BTC). Use "CASH" for cash balances.

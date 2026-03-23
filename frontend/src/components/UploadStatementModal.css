@@ -66,6 +66,22 @@
   line-height: 1.5;
 }
 
+.modal-upload-disclaimer {
+  margin: 1rem 0 0;
+  font-size: 0.8125rem;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.modal-upload-disclaimer a {
+  color: #fcd34d;
+  text-decoration: underline;
+}
+
+.modal-upload-disclaimer a:hover {
+  color: #fde68a;
+}
+
 /* File input wrapper - native input is hidden, custom area is clickable */
 .file-input-wrapper {
   position: relative;

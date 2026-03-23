@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react';
 import axios from 'axios';
+import { formatStatementUploadError } from '../utils/statementUploadErrors';
 import './UploadStatementModal.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 const MAX_STATEMENTS = 12;
-const MAX_STATEMENT_FILE_SIZE_BYTES = 1 * 1024 * 1024; // 1MB per file
+const MAX_STATEMENT_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB per file
 
 function isPdfFile(file) {
   // Some browsers may not provide a reliable MIME type; fall back to extension.
@@ -12,7 +13,7 @@ function isPdfFile(file) {
   return file?.type === 'application/pdf' || name.endsWith('.pdf');
 }
 
-export default function UploadStatementModal({ onClose, onSuccess, onStartUpload }) {
+export default function UploadStatementModal({ onClose, onSuccess, onStartUpload, accessToken = null }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -27,7 +28,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
 
     let nextError = null;
     if (invalidType.length) nextError = 'Only PDF files are accepted.';
-    else if (oversized.length) nextError = 'Each PDF must be up to 1MB per file.';
+    else if (oversized.length) nextError = 'Each PDF must be up to 5MB per file.';
 
     const valid = chosen.filter((f) => isPdfFile(f) && f.size <= MAX_STATEMENT_FILE_SIZE_BYTES);
     const combined = [...files, ...valid].slice(0, MAX_STATEMENTS);
@@ -54,8 +55,9 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
     setError(null);
     const formData = new FormData();
     files.forEach((file) => formData.append('statements', file));
+    const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
     const promise = axios
-      .post(`${API_BASE}/api/upload_statement`, formData)
+      .post(`${API_BASE}/api/upload_statement`, formData, { headers })
       .then((res) => {
         if (res.data.error) throw new Error(res.data.error);
         return res.data;
@@ -73,17 +75,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
         onSuccess?.(data);
       })
       .catch((err) => {
-        const detail = err.response?.data?.detail;
-        const errBody = err.response?.data?.error;
-        let msg = errBody
-          || (Array.isArray(detail) ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ') : detail)
-          || (typeof detail === 'string' ? detail : null)
-          || err.message
-          || 'Upload failed.';
-        if (err.response?.status === 500 && !errBody && !detail) {
-          msg = 'Server error (500). Make sure the API backend is running (e.g. port 8000) and try again.';
-        }
-        setError(msg);
+        setError(formatStatementUploadError(err));
       })
       .finally(() => setLoading(false));
   };
@@ -104,7 +96,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <p className="modal-hint">
-              Select up to {MAX_STATEMENTS} bank statement PDFs (e.g. TD, RBC, Scotia). Each PDF must be up to 1MB.
+              Select up to {MAX_STATEMENTS} bank statement PDFs (e.g. TD, RBC, Scotia). Each PDF must be up to 5MB.
             </p>
             <div className="file-input-wrapper">
               <input
@@ -139,6 +131,14 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
               </ul>
             )}
             {error && <p className="modal-error">{error}</p>}
+            <p className="modal-upload-disclaimer">
+              Parsed amounts and categories are for your reference only and are not tax or investment
+              advice. See our{' '}
+              <a href="/terms" target="_blank" rel="noopener noreferrer">
+                Terms
+              </a>
+              .
+            </p>
           </div>
           <div className="modal-footer">
             <button type="button" onClick={onClose} className="btn-secondary">

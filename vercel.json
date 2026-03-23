@@ -1,5 +1,10 @@
 {
   "installCommand": "npm install && cp requirements-vercel.txt requirements.txt",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300
+    }
+  },
   "rewrites": [
     {
       "source": "/api/(.*)",

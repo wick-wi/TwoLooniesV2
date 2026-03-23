@@ -36,11 +36,15 @@ create table if not exists public.user_statements (
   account_id uuid references public.accounts(id) on delete cascade,
   filename text not null,
   storage_path text, -- Link to the PDF in Supabase Storage for "Audit" view
+  content_sha256 text, -- SHA-256 hex of raw PDF; duplicate detection before parse
   start_date date,
   end_date date,
   provider text,
   created_at timestamptz default now()
 );
+create unique index if not exists user_statements_user_id_content_sha256_uniq
+  on public.user_statements (user_id, content_sha256)
+  where content_sha256 is not null;
 
 -- ==========================================
 -- 3b. BALANCES (Point-in-time account value; event-driven ledger)
@@ -53,7 +57,9 @@ create table if not exists public.balances (
   amount decimal(12,2) not null,
   currency text not null,
   date date not null,
-  created_at timestamptz default now()
+  balance_kind text not null default 'statement',
+  created_at timestamptz default now(),
+  constraint balances_balance_kind_check check (balance_kind in ('statement', 'cash_only'))
 );
 create index if not exists balances_account_date_idx on public.balances (account_id, date desc);
 alter table public.balances enable row level security;
