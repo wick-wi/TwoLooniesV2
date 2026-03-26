@@ -39,7 +39,10 @@ Return ONLY valid JSON matching the provided schema.
 
 1) Statement metadata:
    - provider: The bank or financial institution name (e.g. Wealthsimple, TD, RBC).
-   - account_id: The account number or account ID (digits or alphanumeric). Do not use dates (e.g. 20250402) as account_id.
+   - account_id: The account number or account ID **exactly as printed on the statement** (digits or alphanumeric). 
+     For credit card statements: copy the card identifier verbatim, including masking characters (`*`, `•`), spaces, and punctuation. **Do not replace `*` with digits, do not insert zeros, and do not “complete” or lengthen the number.** If the statement only shows a masked PAN, your `account_id` must still contain those mask characters — it must not become a single long all-digit string.
+     For non-credit accounts: still copy exactly as printed; remove only spaces/dashes if needed for a compact ID, but never invent characters.
+     Do not use dates (e.g. 20250402) as account_id. If no clear account identifier is present, use null.
    - opening_balance: Numeric balance at the start of the statement period. For investment/brokerage accounts (e.g. TFSA, RRSP, Margin), this MUST be the Total Portfolio Value or Total Market Value, NOT just the cash portion. (No currency symbol).
    - closing_balance: Numeric balance at the end of the statement period. For investment/brokerage accounts, this MUST be the Total Portfolio Value or Total Market Value, NOT just the cash portion. (No currency symbol).
    - currency: Currency code, e.g. CAD or USD.
