@@ -1,89 +1,52 @@
 .dashboard-shell {
-  min-height: 100vh;
-  background: #020617;
-  color: white;
-  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  @apply min-h-screen bg-zinc-950 text-zinc-50 font-sans;
 }
 
 .dashboard-shell-header {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(2, 6, 23, 0.8);
+  @apply sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/90;
   backdrop-filter: blur(12px);
 }
 
 .dashboard-shell-header-inner {
+  @apply mx-auto flex items-center justify-between px-6 py-4;
   max-width: 720px;
-  margin: 0 auto;
-  padding: 1rem 1.5rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
 }
 
 .dashboard-shell-logo {
-  width: 2rem;
-  height: 2rem;
-  flex-shrink: 0;
+  @apply h-8 w-8 shrink-0 rounded-lg;
 }
 
 .dashboard-shell-main {
-  max-width: 100%;
-  width: 100%;
-  margin: 0 auto;
-  padding: 1.5rem;
-  padding-bottom: 7rem; /* clearance for fixed bottom nav */
-  min-height: calc(100vh - 60px);
+  @apply mx-auto w-full max-w-full p-6 pb-28;
   box-sizing: border-box;
+  min-height: calc(100vh - 60px);
 }
 
 /* Fixed bottom navigation - z-40 */
 .dashboard-shell-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 40;
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  padding: 0.5rem 0;
+  @apply fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around border-t border-zinc-800 bg-zinc-900/95 py-2;
   padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
-  background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(12px);
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .dashboard-shell-nav-link {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.25rem;
+  @apply flex flex-1 flex-col items-center gap-1 border-t-2 border-transparent px-1 py-2 font-medium text-zinc-400 no-underline transition-colors;
   font-size: 0.7rem;
-  font-weight: 500;
-  color: #94a3b8;
-  text-decoration: none;
-  border-radius: 0.5rem;
-  transition: color 0.2s, background 0.2s;
 }
 
 .dashboard-shell-nav-link:hover {
-  color: #e2e8f0;
+  @apply text-zinc-100;
 }
 
 .dashboard-shell-nav-link-active {
-  color: #fbbf24;
+  @apply border-amber-500 text-amber-500;
 }
 
 .dashboard-shell-nav-link-active:hover {
-  color: #fcd34d;
+  @apply text-amber-400;
 }
 
 .dashboard-shell-nav-icon {
-  width: 1.35rem;
   height: 1.35rem;
+  width: 1.35rem;
 }

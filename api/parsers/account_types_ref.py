@@ -42,6 +42,53 @@ ACCOUNT_TYPE_KEYWORDS_ORDERED = [
 _cached_valid_names: frozenset[str] | None = None
 _cached_keyword_pairs: list[tuple[str, str]] | None = None
 _cached_types_list: list[dict] | None = None
+_cached_alias_map: dict[str, str] | None = None
+
+
+def _compact_text(value: str) -> str:
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+
+
+def _build_alias_map() -> dict[str, str]:
+    """Build compact alias -> canonical name map from account_types.json.
+
+    Strict validation:
+    - each alias value must be a non-empty string
+    - aliases must map to an existing canonical account name
+    - alias cannot map ambiguously to two different canonical names
+    """
+    types_list = _load_raw()
+    canonical_names = {t.get("name") for t in types_list if t.get("name")}
+    alias_map: dict[str, str] = {}
+    for entry in types_list:
+        canonical = entry.get("name")
+        if not canonical:
+            continue
+        aliases = entry.get("aliases") or []
+        if aliases and not isinstance(aliases, list):
+            raise ValueError(f"Invalid aliases for '{canonical}': expected list")
+        for raw_alias in aliases:
+            if not isinstance(raw_alias, str) or not raw_alias.strip():
+                raise ValueError(f"Invalid alias under '{canonical}': aliases must be non-empty strings")
+            if canonical not in canonical_names:
+                raise ValueError(f"Alias '{raw_alias}' references unknown canonical name '{canonical}'")
+            compact_alias = _compact_text(raw_alias)
+            if not compact_alias:
+                continue
+            existing = alias_map.get(compact_alias)
+            if existing and existing != canonical:
+                raise ValueError(
+                    f"Ambiguous alias '{raw_alias}' maps to both '{existing}' and '{canonical}'"
+                )
+            alias_map[compact_alias] = canonical
+    return alias_map
+
+
+def _get_alias_map() -> dict[str, str]:
+    global _cached_alias_map
+    if _cached_alias_map is None:
+        _cached_alias_map = _build_alias_map()
+    return _cached_alias_map
 
 
 def _load_raw() -> list[dict]:
@@ -142,3 +189,37 @@ def get_subtype_id(account_type_name: str) -> str | None:
     _build_plaid_maps()
     assert _cached_subtype_id_map is not None
     return _cached_subtype_id_map.get(account_type_name)
+
+
+def normalize_account_subtype_alias(raw_value: str | None) -> str | None:
+    """Normalize freeform account subtype text to canonical subtype name.
+
+    Returns canonical name from account_types.json when a match is found, else None.
+    """
+    if not raw_value or not isinstance(raw_value, str):
+        return None
+    value = raw_value.strip()
+    if not value:
+        return None
+
+    valid = get_valid_account_type_names()
+    if value in valid:
+        return value
+
+    lowered = value.lower()
+    for canonical in valid:
+        if canonical.lower() == lowered:
+            return canonical
+
+    compact = _compact_text(value)
+    if not compact:
+        return None
+
+    aliased = _get_alias_map().get(compact)
+    if aliased and aliased in valid:
+        return aliased
+
+    for canonical in valid:
+        if _compact_text(canonical) == compact:
+            return canonical
+    return None

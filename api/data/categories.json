@@ -3,6 +3,7 @@
     {
       "id": "self_transfer",
       "name": "Self-Transfer",
+      "label": "🔁 Self-Transfer",
       "tier1": "Financial",
       "keywords": [
         "WSINVESTMENTS",
@@ -14,48 +15,56 @@
     {
         "id": "credit_card_payment",
         "name": "Credit Card Payment",
+        "label": "💳 Credit Card Payment",
         "tier1": "Income",
         "keywords": ["MASTERCARD", "VISA", "AMERICAN EXPRESS", "BMO", "BRIM FINANCIAL", "CANADIAN TIRE BANK", "CAPITAL ONE", "CIBC", "COLLABRIA", "DESJARDINS", "EQ BANK", "FAIRSTONE BANK", "HOME TRUST", "ICICI BANK CANADA", "KOHO", "LAURENTIAN BANK", "MBNA", "NATIONAL BANK OF CANADA", "NEO FINANCIAL", "PC FINANCIAL", "RBC", "ROGERS BANK", "SCOTIABANK", "SERVUS CREDIT UNION", "SIMPLII FINANCIAL", "TANGERINE BANK", "TD", "VANCITY", "WEALTHSIMPLE CREDIT"]
       },
     {
       "id": "income",
       "name": "Income",
+      "label": "💰 Income",
       "tier1": "Income",
       "keywords": ["PAYROLL", "DIRECT DEP", "GST/HST", "EI PAYMENT", "DIVIDEND", "INTEREST EARNED", "TAX REFUND", "CASH BACK"]
     },
     {
       "id": "housing",
       "name": "Housing",
+      "label": "🏠 Housing",
       "tier1": "Fixed",
       "keywords": ["RENT", "MORTGAGE", "CONDO", "PROPERTY TAX", "HYDRO", "ENBRIDGE", "TORONTO WATER", "RELIANCE"]
     },
     {
       "id": "utilities_comm",
       "name": "Utilities & Phone",
+      "label": "💡 Utilities & Phone",
       "tier1": "Fixed",
       "keywords": ["ROGERS", "BELL", "TELUS", "FIDO", "KUDO", "TEKSAVVY", "PUBLIC MOBILE", "CHATR", "ALECTRA UTILITIES", "ALTALINK", "ATCO", "BC HYDRO", "BROOKFIELD RENEWABLE", "BRUCE POWER", "CAPITAL POWER", "CENTRA GAS", "COLLECTIVE WASTE SOLUTIONS", "ELEXICON ENERGY", "EMERA", "ENBRIDGE GAS", "ÉNERGIE NB POWER", "ENMAX", "EPCOR", "FORTISALBERTA", "FORTISBC", "GFL ENVIRONMENTAL", "HYDRO ONE", "HYDRO-QUÉBEC", "MANITOBA HYDRO", "NEWFOUNDLAND AND LABRADOR HYDRO", "NEWFOUNDLAND POWER", "NOVA SCOTIA POWER", "ONTARIO POWER GENERATION", "SASKENERGY", "SASKPOWER", "TC ENERGY", "TORONTO HYDRO", "TRANSALTA", "UNION GAS", "VEOLIA CANADA", "WASTE CONNECTIONS OF CANADA", "WASTE MANAGEMENT", "YUKON ENERGY"]
     },
     {
       "id": "food_grocery",
       "name": "Groceries",
+      "label": "🛒 Groceries",
       "tier1": "Variable",
       "keywords": ["LOBLAWS", "METRO", "NO FRILLS", "SOBEYS", "COSTCO", "WAL-MART", "FRESHCO", "FARM BOY", "LONGOS"]
     },
     {
       "id": "food_dining",
       "name": "Dining & Coffee",
+      "label": "☕️ Dining & Coffee",
       "tier1": "Variable",
       "keywords": ["TIM HORTONS", "STARBUCKS", "UBER EATS", "DOORDASH", "MCDONALDS", "RESTO", "PUB", "BAR", "A&W", "SUBWAY"]
     },
     {
       "id": "transport",
       "name": "Transport & Auto",
+      "label": "🚗 Transport & Auto",
       "tier1": "Fixed",
       "keywords": ["PRESTO", "TTC", "GO TRANSIT", "SHELL", "PETRO CAN", "ESSO", "UBER TRIP", "LYFT", "407 ETR", "CAA", "INTACT", "AVIVA", "DESJARDINS INS"]
     },
     {
       "id": "etransfer",
       "name": "E-Transfer",
+      "label": "📤 E-Transfer",
       "tier1": "Financial",
       "force_if_keywords_present": true,
       "keywords": ["INTERAC E-TRF", "E-TRANSFER", "EMAIL TRF"]
@@ -63,36 +72,42 @@
     {
       "id": "debt_interest",
       "name": "Debt & Interest",
+      "label": "💸 Debt & Interest",
       "tier1": "Fixed",
       "keywords": ["INTEREST CHARGE", "LINE OF CREDIT", "OSAP", "LOAN PYMT", "CREDIT CARD PYMT"]
     },
     {
       "id": "entertainment",
       "name": "Entertainment & Subs",
+      "label": "🎟️ Entertainment & Subs",
       "tier1": "Variable",
       "keywords": ["NETFLIX", "SPOTIFY", "DISNEY PLUS", "AMAZON PRIME", "APPLE.COM/BILL", "YOUTUBEPREM", "CINEPLEX", "EVENTBRITE", "TICKETMASTER"]
     },
     {
       "id": "travel",
       "name": "Travel",
+      "label": "✈️ Travel",
       "tier1": "Variable",
       "keywords": ["AIR CANADA", "WESTJET", "EXPEDIA", "AIRBNB", "HOTEL", "VIA RAIL", "FLAIR AIR", "PORTER AIR"]
     },
     {
       "id": "household",
       "name": "Household & Shopping",
+      "label": "🛍️ Household & Shopping",
       "tier1": "Variable",
       "keywords": ["IKEA", "HOME DEPOT", "CANADIAN TIRE", "AMAZON.CA", "WAYFAIR", "STRUCTUBE", "LEONS", "THE BRICK", "INDIGO", "WINNERS"]
     },
     {
       "id": "health_wellness",
       "name": "Health & Wellness",
+      "label": "🩺 Health & Wellness",
       "tier1": "Variable",
       "keywords": ["SHOPPERS DRUG MART", "REXALL", "GOODLIFE", "FIT4LESS", "DENTIST", "OPTICAL", "REMEDY'S"]
     },
     {
       "id": "securities_trading",
       "name": "Securities Trading",
+      "label": "📈 Securities Trading",
       "tier1": "Financial",
       "force_if_keywords_present": true,
       "keywords": [
@@ -120,6 +135,7 @@
     {
       "id": "financial",
       "name": "Bank & broker fees",
+      "label": "🏦 Bank & broker fees",
       "tier1": "Financial",
       "keywords": [
         "WEALTHSIMPLE MANAGEMENT FEE",
@@ -149,18 +165,21 @@
     {
       "id": "loans_reimbursements",
       "name": "Loans & Reimbursements",
+      "label": "🤝 Loans & Reimbursements",
       "tier1": "Financial",
       "keywords": ["REIMBURSEMENT", "SPLIT", "PAY BACK", "LOAN REPAY", "VENMO", "PAYPAL FRIENDS"]
     },
     {
       "id": "gifts_donations",
       "name": "Gifts and Donations",
+      "label": "🎁 Gifts and Donations",
       "tier1": "Variable",
       "keywords": ["GIFT", "DONATION", "BIRTHDAY GIFT", "WEDDING GIFT"]
     },
     {
       "id": "career_education",
       "name": "Career & Education",
+      "label": "🎓 Career & Education",
       "tier1": "Variable",
       "keywords": ["TUITION", "COURSE", "UDEMY", "LINKEDIN LEARNING", "COURSERA", "PLURALSIGHT", "STUDENT FEE", "TEXTBOOK", "SEMINAR", "CONFERENCE", "PROFESSIONAL DEVELOPMENT"]
     }

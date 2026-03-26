@@ -1,15 +1,15 @@
 {
   "account_types": [
-    { "type": "loan", "subtype": "auto_loan", "name": "AutoLoan", "generates_transactions": false, "wealth_type": "Liability" },
-    { "type": "depository", "subtype": "chequing", "name": "Chequing", "generates_transactions": true, "wealth_type": "Liquid Cash" },
-    { "type": "credit", "subtype": "credit_card", "name": "Credit Card", "generates_transactions": true, "wealth_type": "Liability" },
+    { "type": "loan", "subtype": "auto_loan", "name": "AutoLoan", "aliases": ["auto loan", "car loan"], "generates_transactions": false, "wealth_type": "Liability" },
+    { "type": "depository", "subtype": "chequing", "name": "Chequing", "aliases": ["checking", "checking account", "cheque", "chequing account", "current account", "demand deposit"], "generates_transactions": true, "wealth_type": "Liquid Cash" },
+    { "type": "credit", "subtype": "credit_card", "name": "Credit Card", "aliases": ["credit", "credit card account", "visa", "mastercard", "amex"], "generates_transactions": true, "wealth_type": "Liability" },
     { "type": "investment", "subtype": "crypto", "name": "Crypto", "generates_transactions": false, "wealth_type": "Liquid Asset" },
     { "type": "investment", "subtype": "dpsp", "name": "DPSP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
     { "type": "investment", "subtype": "esop", "name": "ESOP", "generates_transactions": false, "wealth_type": "Liquid Asset" },
     { "type": "investment", "subtype": "fhsa", "name": "FHSA", "generates_transactions": false, "wealth_type": "Purpose Locked" },
     { "type": "investment", "subtype": "gic", "name": "GIC", "generates_transactions": false, "wealth_type": "Time Locked" },
-    { "type": "credit", "subtype": "heloc", "name": "HELOC", "generates_transactions": true, "wealth_type": "Liability" },
-    { "type": "credit", "subtype": "line_of_credit", "name": "Line of Credit", "generates_transactions": true, "wealth_type": "Liability" },
+    { "type": "credit", "subtype": "heloc", "name": "HELOC", "aliases": ["home equity line of credit", "heloc account"], "generates_transactions": true, "wealth_type": "Liability" },
+    { "type": "credit", "subtype": "line_of_credit", "name": "Line of Credit", "aliases": ["line credit", "loc"], "generates_transactions": true, "wealth_type": "Liability" },
     { "type": "investment", "subtype": "lira", "name": "LIRA", "generates_transactions": false, "wealth_type": "Retirement Locked" },
     { "type": "investment", "subtype": "margin", "name": "Margin", "generates_transactions": false, "wealth_type": "Liquid Asset" },
     { "type": "loan", "subtype": "mortgage", "name": "Mortgage", "generates_transactions": false, "wealth_type": "Liability" },
@@ -17,9 +17,9 @@
     { "type": "investment", "subtype": "resp", "name": "RESP", "generates_transactions": false, "wealth_type": "Purpose Locked" },
     { "type": "investment", "subtype": "rpp", "name": "RPP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
     { "type": "investment", "subtype": "rrif", "name": "RRIF", "generates_transactions": false, "wealth_type": "Retirement Locked" },
-    { "type": "investment", "subtype": "rrsp", "name": "RRSP", "generates_transactions": false, "wealth_type": "Retirement Locked" },
-    { "type": "depository", "subtype": "savings", "name": "Savings", "generates_transactions": true, "wealth_type": "Liquid Cash" },
+    { "type": "investment", "subtype": "rrsp", "name": "RRSP", "aliases": ["registered retirement savings plan", "retirement savings plan"], "generates_transactions": false, "wealth_type": "Retirement Locked" },
+    { "type": "depository", "subtype": "savings", "name": "Savings", "aliases": ["saving", "savings account", "high interest savings", "hisa"], "generates_transactions": true, "wealth_type": "Liquid Cash" },
     { "type": "loan", "subtype": "student_loan", "name": "Student Loan", "generates_transactions": false, "wealth_type": "Liability" },
-    { "type": "investment", "subtype": "tfsa", "name": "TFSA", "generates_transactions": false, "wealth_type": "Liquid Asset" }
+    { "type": "investment", "subtype": "tfsa", "name": "TFSA", "aliases": ["tax free savings", "tax free savings account"], "generates_transactions": false, "wealth_type": "Liquid Asset" }
   ]
 }

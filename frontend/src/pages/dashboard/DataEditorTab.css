@@ -1,83 +1,53 @@
 .data-editor-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  width: 100%;
-  min-width: 0;
+  @apply flex w-full min-w-0 flex-col gap-6;
 }
 
 .data-editor-error {
-  padding: 1rem 1.25rem;
-  background: rgba(248, 113, 113, 0.15);
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  border-radius: 0.5rem;
-  color: #fca5a5;
-  font-size: 0.9rem;
+  @apply rounded-xl border border-rose-500/30 bg-rose-500/10 px-5 py-4 text-sm text-rose-300;
 }
 
 .data-editor-success {
-  padding: 1rem 1.25rem;
-  background: rgba(74, 222, 128, 0.15);
-  border: 1px solid rgba(74, 222, 128, 0.4);
-  border-radius: 0.5rem;
-  color: #86efac;
-  font-size: 0.9rem;
+  @apply rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-5 py-4 text-sm text-emerald-300;
 }
 
 .data-editor-section-title {
-  margin: 0 0 0.75rem;
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: #e2e8f0;
+  @apply mb-3 mt-0 text-lg font-semibold text-zinc-100;
+}
+
+.data-editor-section-count {
+  @apply font-mono text-sm font-normal text-zinc-400;
 }
 
 .data-editor-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
+  @apply mb-4 flex flex-wrap gap-3;
 }
 
 .data-editor-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.625rem 1.25rem;
-  border-radius: 0.5rem;
-  font-size: 0.95rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.2s, box-shadow 0.2s, background 0.2s;
+  @apply inline-flex cursor-pointer items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-medium transition;
 }
 
 .data-editor-btn-primary {
-  background: linear-gradient(to right, #fbbf24, #ca8a04);
-  color: #000;
-  border: none;
+  @apply border border-amber-500 bg-amber-500 text-zinc-950;
 }
 
 .data-editor-btn-primary:hover:not(:disabled) {
-  opacity: 0.95;
-  box-shadow: 0 0 20px rgba(251, 191, 36, 0.4);
+  @apply bg-amber-400 shadow-lg shadow-amber-500/20;
 }
 
 .data-editor-btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #e2e8f0;
+  @apply border border-zinc-800 bg-zinc-900 text-zinc-100;
 }
 
 .data-editor-btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
+  @apply border-zinc-700 bg-zinc-800;
 }
 
 .data-editor-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  @apply cursor-not-allowed opacity-60;
 }
 
 .spin {
-  animation: spin 1s linear infinite;
+  @apply animate-spin;
 }
 
 @keyframes spin {
@@ -86,40 +56,32 @@
 }
 
 .data-editor-empty {
-  padding: 2.5rem 2rem;
-  text-align: center;
+  @apply rounded-2xl border border-zinc-800 bg-zinc-900 px-8 py-10 text-center;
 }
 
 .data-editor-empty-icon {
-  color: #64748b;
-  margin-bottom: 1rem;
+  @apply mb-4 text-zinc-500;
 }
 
 .data-editor-empty p {
   margin: 0 0 1.5rem;
-  color: #94a3b8;
+  @apply text-zinc-400;
 }
 
 .data-editor-empty-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.75rem;
+  @apply flex flex-wrap justify-center gap-3;
 }
 
 .data-editor-empty-error {
-  margin: 1rem 0 0;
-  font-size: 0.9rem;
-  color: #fbbf24;
+  @apply mt-4 text-sm text-amber-500;
 }
 
 .data-editor-accounts {
-  padding: 0;
-  overflow: hidden;
+  @apply overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-0;
 }
 
 .data-editor-account-block {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  @apply border-b border-zinc-800;
 }
 
 .data-editor-account-block:last-child {
@@ -127,14 +89,7 @@
 }
 
 .data-editor-account-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.75rem 1.25rem;
-  background: rgba(255, 255, 255, 0.03);
-  font-size: 0.9rem;
-  cursor: pointer;
+  @apply flex cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 bg-zinc-900 px-5 py-4 text-sm;
   user-select: none;
 }
 
@@ -147,14 +102,11 @@
 }
 
 .data-editor-account-block > summary:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+  @apply outline-none ring-2 ring-amber-500/20;
 }
 
 .data-editor-account-chevron {
-  flex-shrink: 0;
-  color: #94a3b8;
-  transition: transform 0.15s ease;
+  @apply shrink-0 text-zinc-400 transition-transform;
 }
 
 .data-editor-account-block[open] .data-editor-account-chevron {
@@ -162,25 +114,20 @@
 }
 
 .data-editor-account-name {
-  font-weight: 600;
-  color: #e2e8f0;
+  @apply font-semibold text-zinc-100;
 }
 
 .data-editor-account-type,
 .data-editor-account-provider {
-  color: #94a3b8;
+  @apply text-zinc-400;
 }
 
 .data-editor-account-validation-icons {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+  @apply inline-flex items-center gap-1.5;
 }
 
 .data-editor-account-statement-count {
-  margin-left: auto;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
+  @apply ml-auto font-mono text-sm text-zinc-400;
 }
 
 .data-editor-account-block .data-editor-statements {
@@ -201,56 +148,37 @@
 }
 
 .data-editor-tab .modal-content {
-  background: rgba(15, 23, 42, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 1rem;
+  @apply rounded-2xl border border-zinc-800 bg-zinc-900;
   width: 90%;
   max-width: 420px;
   box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
 }
 
 .data-editor-tab .modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  @apply flex items-center justify-between border-b border-zinc-800 px-6 py-5;
 }
 
 .data-editor-tab .modal-header h2 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: #e2e8f0;
+  @apply m-0 text-xl font-semibold text-zinc-100;
 }
 
 .data-editor-tab .modal-close {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.5rem;
+  @apply rounded-lg border border-zinc-800 bg-zinc-950 p-2 text-zinc-400;
   font-size: 1.25rem;
   line-height: 1;
   cursor: pointer;
-  color: #94a3b8;
-  padding: 0.375rem 0.5rem;
 }
 
 .data-editor-tab .modal-body {
-  padding: 1.5rem;
+  @apply px-6 py-6;
 }
 
 .data-editor-tab .modal-hint {
-  margin: 0 0 1rem;
-  font-size: 0.95rem;
-  color: #94a3b8;
+  @apply mb-4 mt-0 text-sm text-zinc-400;
 }
 
 .data-editor-tab .modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 1rem 1.5rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  @apply flex justify-end gap-3 border-t border-zinc-800 px-6 py-4;
 }
 
 .data-editor-statements {
@@ -261,11 +189,7 @@
 }
 
 .data-editor-statement-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  @apply flex items-center justify-between border-b border-zinc-800 px-5 py-4;
 }
 
 .data-editor-statement-item:last-child {
@@ -273,74 +197,58 @@
 }
 
 .data-editor-statement-info {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  @apply flex items-center gap-3;
   min-width: 0;
 }
 
 .data-editor-statement-info svg {
-  flex-shrink: 0;
-  color: #94a3b8;
+  @apply shrink-0 text-zinc-400;
 }
 
 .data-editor-statement-filename {
-  font-weight: 500;
+  @apply font-medium text-zinc-100;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .data-editor-statement-meta {
-  font-size: 0.85rem;
-  color: #64748b;
+  @apply text-sm text-zinc-400;
   flex-shrink: 0;
 }
 
 .data-editor-statement-validation-icons {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+  @apply ml-1 inline-flex items-center gap-1.5;
   margin-left: 0.2rem;
 }
 
 .data-editor-statement-validation-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  color: #64748b;
-  background: rgba(100, 116, 139, 0.12);
-  border: 1px solid rgba(100, 116, 139, 0.28);
+  @apply inline-flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-950 text-zinc-500;
   opacity: 0.5;
 }
 
 .data-editor-statement-validation-icon.is-active {
   opacity: 1;
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.28);
-  border-color: #22c55e;
+  @apply border-emerald-400 bg-emerald-400/15 text-emerald-400;
+}
+
+.data-editor-statement-balances {
+  @apply inline-flex flex-wrap items-center gap-2 text-xs text-zinc-400;
+  margin-left: 0.25rem;
+}
+
+.data-editor-balance-pair {
+  @apply font-mono;
+  white-space: nowrap;
 }
 
 .data-editor-btn-remove {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.4rem 0.75rem;
-  background: rgba(248, 113, 113, 0.15);
-  border: 1px solid rgba(248, 113, 113, 0.3);
-  color: #fca5a5;
-  border-radius: 0.375rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-  transition: background 0.2s;
+  @apply inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-1.5 text-sm text-rose-300 transition;
   flex-shrink: 0;
 }
 
 .data-editor-btn-remove:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.25);
+  @apply bg-rose-500/20;
 }
 
 .data-editor-btn-remove:disabled {
@@ -349,15 +257,11 @@
 }
 
 .data-editor-transactions {
-  width: 100%;
-  min-width: 0;
+  @apply w-full min-w-0;
 }
 
 .data-editor-table-wrapper {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  overflow: hidden;
+  @apply w-full min-w-0 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-0;
 }
 
 .data-editor-table-scroll {
@@ -366,24 +270,26 @@
 }
 
 .data-editor-table {
-  width: 100%;
-  table-layout: fixed;
+  @apply w-full;
+  table-layout: auto;
   border-collapse: collapse;
   font-size: 0.9rem;
 }
 
-/* Column widths — description column wraps up to 3 lines then clamps (see .data-editor-desc-main) */
+/* Column sizing — prefer shrink-to-fit for non-description columns */
 .data-editor-table > thead > tr:first-child > th:nth-child(1),
 .data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(1),
 .data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(1) {
-  width: 10rem;
+  width: 1%;
+  min-width: 8.5rem;
+  white-space: nowrap;
 }
 
 .data-editor-table > thead > tr:first-child > th:nth-child(2),
 .data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(2),
 .data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(2) {
-  max-width: 28rem;
-  width: 36%;
+  width: auto;
+  max-width: none;
   overflow: visible;
   vertical-align: top;
 }
@@ -400,21 +306,24 @@
 .data-editor-table > thead > tr:first-child > th:nth-child(3),
 .data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(3),
 .data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(3) {
-  width: 7.5rem;
+  width: 1%;
+  white-space: nowrap;
 }
 
 .data-editor-table > thead > tr:first-child > th:nth-child(4),
 .data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(4),
 .data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(4) {
-  width: 20%;
+  width: 1%;
   min-width: 8.5rem;
+  max-width: 12rem;
 }
 
 .data-editor-table > thead > tr:first-child > th:nth-child(5),
 .data-editor-table > thead > tr.data-editor-filter-row > td:nth-child(5),
 .data-editor-table > tbody > tr:not(.data-editor-transfer-detail-row) > td:nth-child(5) {
-  width: 14%;
+  width: 1%;
   min-width: 6.5rem;
+  white-space: nowrap;
 }
 
 /* Full-width rows (empty state, transfer detail) must not inherit per-column widths */
@@ -426,19 +335,16 @@
 
 .data-editor-table th,
 .data-editor-table td {
-  padding: 0.75rem 1rem;
-  text-align: left;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  @apply border-b border-zinc-800 px-4 py-3 text-left;
 }
 
 .data-editor-table th {
-  font-weight: 600;
-  color: #94a3b8;
-  background: rgba(0, 0, 0, 0.2);
+  @apply bg-zinc-950/80 text-xs font-semibold uppercase text-zinc-400;
+  letter-spacing: 0.14em;
 }
 
 .data-editor-table td {
-  color: #e2e8f0;
+  @apply text-zinc-100;
 }
 
 .data-editor-table .text-right {
@@ -450,21 +356,20 @@
 }
 
 .data-editor-table .amount-positive {
-  color: #34d399;
+  @apply font-mono text-emerald-400;
 }
 
 .data-editor-table .amount-negative {
-  color: #f87171;
+  @apply font-mono text-rose-400;
 }
 
 .data-editor-table-empty {
-  text-align: center;
-  color: #64748b;
+  @apply text-center text-zinc-400;
   padding: 1.5rem !important;
 }
 
 .data-editor-table .data-editor-row-needs-review {
-  background: rgba(249, 115, 22, 0.08);
+  @apply bg-amber-500/5;
 }
 
 /* Processed but kept visible for tagging when "Show only Needs Review" is on */
@@ -477,30 +382,25 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #f97316;
+  background: #f59e0b;
   margin-right: 0.5rem;
   vertical-align: middle;
 }
 
+.data-editor-category-pill {
+  @apply inline-block rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-1 text-xs font-medium text-zinc-400;
+}
+
 .data-editor-transactions-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.75rem 1.5rem;
-  margin-bottom: 0.75rem;
+  @apply mb-3 flex flex-wrap items-center gap-x-6 gap-y-3;
 }
 
 .data-editor-transactions-header .data-editor-section-title {
-  margin: 0;
+  @apply mb-0;
 }
 
 .data-editor-toggle-needs-review {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-  color: #94a3b8;
-  cursor: pointer;
+  @apply inline-flex cursor-pointer items-center gap-2 text-sm text-zinc-400;
   user-select: none;
 }
 
@@ -509,19 +409,11 @@
 }
 
 .data-editor-clear-filters-btn {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.85rem;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 0.375rem;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  @apply cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-400 transition;
 }
 
 .data-editor-clear-filters-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+  @apply border-zinc-700 bg-zinc-800 text-zinc-100;
 }
 
 /* Column header filter buttons */
@@ -542,7 +434,7 @@
 }
 
 .data-editor-th-filter-btn:hover {
-  color: #fbbf24;
+  @apply text-amber-500;
 }
 
 .data-editor-th-filter-btn-right {
@@ -550,12 +442,11 @@
 }
 
 .data-editor-th-filter-active .data-editor-th-filter-btn {
-  color: #fbbf24;
+  @apply text-amber-500;
 }
 
 .data-editor-th-filter-active {
-  background: rgba(251, 191, 36, 0.08);
-  color: #fbbf24;
+  @apply bg-amber-500/10 text-amber-500;
 }
 
 .data-editor-th-filter-icon {
@@ -570,23 +461,15 @@
 }
 
 .data-editor-date-sort-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.15rem;
+  @apply inline-flex items-center justify-center rounded p-0.5 leading-none text-zinc-400 transition;
   margin: 0;
-  line-height: 0;
-  color: #94a3b8;
   background: none;
   border: none;
-  border-radius: 0.25rem;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
 }
 
 .data-editor-date-sort-btn:hover {
-  color: #fbbf24;
-  background: rgba(255, 255, 255, 0.06);
+  @apply bg-zinc-800 text-amber-500;
 }
 
 .data-editor-th-filter-active .data-editor-date-sort-btn {
@@ -594,7 +477,7 @@
 }
 
 .data-editor-th-filter-active .data-editor-date-sort-btn:hover {
-  color: #fbbf24;
+  @apply text-amber-500;
 }
 
 /* Lucide Triangle default points up → ascending (oldest first at top) */
@@ -610,10 +493,8 @@
 
 /* Filter row (second row in thead) */
 .data-editor-filter-row td {
-  padding: 0.5rem 1rem;
+  @apply border-b border-zinc-800 bg-zinc-950/60 px-4 py-2;
   vertical-align: middle;
-  background: rgba(0, 0, 0, 0.25);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .data-editor-filter-row-actions {
@@ -621,19 +502,17 @@
   right: 0;
   width: 80px;
   min-width: 80px;
-  background: rgba(0, 0, 0, 0.25) !important;
-  box-shadow: -1px 0 0 rgba(255, 255, 255, 0.1);
+  background: rgba(9, 9, 11, 0.95) !important;
+  box-shadow: -1px 0 0 rgba(39, 39, 42, 1);
   z-index: 2;
 }
 
 .data-editor-filter-cell-active {
-  background: rgba(251, 191, 36, 0.06);
+  @apply bg-amber-500/5;
 }
 
 .data-editor-filter-inputs {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  @apply flex items-center gap-2;
   flex-wrap: wrap;
 }
 
@@ -644,21 +523,15 @@
 .data-editor-filter-date,
 .data-editor-filter-text,
 .data-editor-filter-number {
-  padding: 0.4rem 0.5rem;
-  font-size: 0.875rem;
-  color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 0.375rem;
+  @apply rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100;
   min-width: 0;
 }
 
 .data-editor-filter-date:focus,
 .data-editor-filter-text:focus,
 .data-editor-filter-number:focus {
-  outline: none;
-  border-color: #f97316;
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+  @apply outline-none ring-2 ring-amber-500/20;
+  border-color: #f59e0b;
 }
 
 .data-editor-filter-text {
@@ -671,28 +544,19 @@
 }
 
 .data-editor-filter-sep {
-  color: #64748b;
-  font-size: 0.85rem;
+  @apply text-sm text-zinc-400;
   flex-shrink: 0;
 }
 
 .data-editor-filter-clear-col {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
+  @apply inline-flex cursor-pointer items-center justify-center rounded p-1 text-zinc-500 transition;
   background: transparent;
   border: none;
-  color: #64748b;
-  cursor: pointer;
-  border-radius: 4px;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
 }
 
 .data-editor-filter-clear-col:hover {
-  background: rgba(248, 113, 113, 0.15);
-  color: #fca5a5;
+  @apply bg-rose-500/10 text-rose-300;
 }
 
 /* react-select in filter row */
@@ -707,21 +571,13 @@
 }
 
 .data-editor-category-select {
-  width: 100%;
+  @apply w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100;
   min-width: 140px;
-  padding: 0.4rem 0.5rem;
-  font-size: 0.9rem;
-  color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 0.375rem;
-  cursor: pointer;
 }
 
 .data-editor-category-select:focus {
-  outline: none;
-  border-color: #f97316;
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+  @apply outline-none ring-2 ring-amber-500/20;
+  border-color: #f59e0b;
 }
 
 .data-editor-bulk-prompt {
@@ -759,9 +615,7 @@
 }
 
 .data-editor-loading {
-  padding: 2rem;
-  text-align: center;
-  color: #94a3b8;
+  @apply px-8 py-8 text-center text-sm text-zinc-400;
 }
 
 /* Tags column */
@@ -781,18 +635,13 @@
 }
 
 .data-editor-tag-chip {
-  display: inline-block;
-  padding: 2px 8px;
-  font-size: 0.78rem;
+  @apply inline-block rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-500;
   line-height: 1.4;
-  border-radius: 4px;
-  background: rgba(251, 191, 36, 0.15);
-  color: #fbbf24;
   white-space: nowrap;
 }
 
 .data-editor-tags-empty {
-  color: #64748b;
+  @apply text-zinc-400;
 }
 
 .data-editor-desc {
@@ -816,19 +665,13 @@
 }
 
 .data-editor-transfer-pill {
-  flex-shrink: 0;
-  border: 1px solid rgba(251, 191, 36, 0.35);
-  background: rgba(251, 191, 36, 0.12);
-  color: #fbbf24;
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
-  font-size: 0.75rem;
+  @apply shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-500;
   line-height: 1.2;
   cursor: pointer;
 }
 
 .data-editor-transfer-pill:hover {
-  background: rgba(251, 191, 36, 0.18);
+  @apply bg-amber-500/15;
 }
 
 .data-editor-transfer-pill:disabled {
@@ -855,13 +698,7 @@
 }
 
 .data-editor-transfer-detail {
-  margin: 0.25rem 0 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 0.5rem;
-  background: rgba(251, 191, 36, 0.08);
-  border: 1px solid rgba(251, 191, 36, 0.18);
-  color: #e2e8f0;
-  font-size: 0.85rem;
+  @apply my-1 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-zinc-100;
   min-width: 0;
 }
 
@@ -873,17 +710,7 @@
 }
 
 .data-editor-unlink-self-transfer {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(248, 113, 113, 0.45);
-  background: rgba(248, 113, 113, 0.1);
-  color: #fca5a5;
-  border-radius: 0.375rem;
-  padding: 0.4rem;
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-  cursor: pointer;
+  @apply inline-flex min-h-9 min-w-9 cursor-pointer items-center justify-center rounded-lg border border-rose-500/40 bg-rose-500/10 p-1.5 text-rose-300;
   max-width: 100%;
   box-sizing: border-box;
 }
@@ -893,7 +720,7 @@
 }
 
 .data-editor-unlink-self-transfer:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.18);
+  @apply bg-rose-500/20;
 }
 
 .data-editor-unlink-self-transfer:disabled {
@@ -907,10 +734,10 @@
   position: sticky;
   right: 0;
   /* Solid background so scrolling content does not show through */
-  background-color: #0f172a;
+  background-color: #18181b;
   z-index: 2;
   /* Left edge separator without border-collapse issues */
-  box-shadow: -1px 0 0 rgba(255, 255, 255, 0.1);
+  box-shadow: -1px 0 0 rgba(39, 39, 42, 1);
   width: 80px;
   min-width: 80px;
   text-align: center;
@@ -921,7 +748,7 @@
   /* Header stays above body cells when scrolling down and right */
   z-index: 3;
   /* Match table header background so sticky header blends */
-  background-color: rgba(0, 0, 0, 0.2);
+  background-color: rgba(9, 9, 11, 0.96);
 }
 
 .data-editor-actions-cell {
@@ -929,25 +756,12 @@
 }
 
 .data-editor-actions-cell-inner {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  @apply inline-flex items-center justify-center gap-1.5;
   flex-wrap: wrap;
 }
 
 .data-editor-mark-reviewed {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(52, 211, 153, 0.45);
-  background: rgba(52, 211, 153, 0.1);
-  color: #6ee7b7;
-  border-radius: 0.375rem;
-  padding: 0.4rem;
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-  cursor: pointer;
+  @apply inline-flex min-h-9 min-w-9 cursor-pointer items-center justify-center rounded-lg border border-emerald-400/40 bg-emerald-400/10 p-1.5 text-emerald-300;
   box-sizing: border-box;
 }
 
@@ -956,7 +770,7 @@
 }
 
 .data-editor-mark-reviewed:hover:not(:disabled) {
-  background: rgba(52, 211, 153, 0.18);
+  @apply bg-emerald-400/20;
 }
 
 .data-editor-mark-reviewed:disabled {
@@ -971,37 +785,21 @@
 }
 
 .data-editor-bulk-inline-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fbbf24;
-  cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
-  transition: background 0.15s, color 0.15s;
+  @apply inline-flex cursor-pointer items-center justify-center rounded p-1 text-amber-500 transition;
 }
 
 .data-editor-bulk-inline-icon:hover {
-  background: rgba(251, 191, 36, 0.2);
-  color: #fcd34d;
+  @apply bg-amber-500/15 text-amber-400;
 }
 
 .data-editor-bulk-inline-dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
+  @apply inline-flex cursor-pointer items-center justify-center rounded p-1 text-zinc-400 transition;
   border: none;
   background: transparent;
-  color: #94a3b8;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s, color 0.15s;
 }
 
 .data-editor-bulk-inline-dismiss:hover:not(:disabled) {
-  background: rgba(148, 163, 184, 0.2);
-  color: #e2e8f0;
+  @apply bg-zinc-800 text-zinc-100;
 }
 
 .data-editor-bulk-inline-dismiss:disabled {
@@ -1013,24 +811,17 @@
 .data-editor-statement-checkbox {
   width: 16px;
   height: 16px;
-  accent-color: #fbbf24;
+  accent-color: #f59e0b;
   cursor: pointer;
   flex-shrink: 0;
 }
 
 .data-editor-statement-selected {
-  background: rgba(251, 191, 36, 0.08);
+  @apply bg-amber-500/5;
 }
 
 .data-editor-selection-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.625rem 1.25rem;
-  margin-bottom: 0.5rem;
-  background: rgba(251, 191, 36, 0.1);
-  border: 1px solid rgba(251, 191, 36, 0.3);
-  border-radius: 0.5rem;
+  @apply mb-2 flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-5 py-3;
   animation: selection-bar-in 0.15s ease-out;
 }
 
@@ -1040,12 +831,7 @@
 }
 
 .data-editor-selection-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: #fbbf24;
+  @apply inline-flex items-center gap-1.5 text-sm font-medium text-amber-500;
 }
 
 .data-editor-btn-bulk-delete {
@@ -1054,23 +840,13 @@
 }
 
 .data-editor-btn-selection-clear {
-  padding: 0.35rem 0.75rem;
-  font-size: 0.85rem;
-  color: #94a3b8;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 0.375rem;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  @apply cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-400 transition;
 }
 
 .data-editor-btn-selection-clear:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e8f0;
+  @apply border-zinc-700 bg-zinc-800 text-zinc-100;
 }
 
 .data-editor-selection-filter-hint {
-  font-weight: 400;
-  color: #94a3b8;
-  font-size: 0.85rem;
+  @apply text-sm font-normal text-zinc-400;
 }

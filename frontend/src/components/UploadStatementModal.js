@@ -7,10 +7,12 @@ const API_BASE = process.env.REACT_APP_API_URL ?? '';
 const MAX_STATEMENTS = 12;
 const MAX_STATEMENT_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB per file
 
-function isPdfFile(file) {
+function isSupportedStatementFile(file) {
   // Some browsers may not provide a reliable MIME type; fall back to extension.
   const name = (file?.name || '').toLowerCase();
-  return file?.type === 'application/pdf' || name.endsWith('.pdf');
+  if (file?.type === 'application/pdf' || name.endsWith('.pdf')) return true;
+  if (file?.type === 'text/csv' || name.endsWith('.csv')) return true;
+  return false;
 }
 
 export default function UploadStatementModal({ onClose, onSuccess, onStartUpload, accessToken = null }) {
@@ -23,14 +25,14 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
     const chosen = Array.from(e.target.files || []);
     setError(null);
 
-    const invalidType = chosen.filter((f) => !isPdfFile(f));
-    const oversized = chosen.filter((f) => isPdfFile(f) && f.size > MAX_STATEMENT_FILE_SIZE_BYTES);
+    const invalidType = chosen.filter((f) => !isSupportedStatementFile(f));
+    const oversized = chosen.filter((f) => isSupportedStatementFile(f) && f.size > MAX_STATEMENT_FILE_SIZE_BYTES);
 
     let nextError = null;
-    if (invalidType.length) nextError = 'Only PDF files are accepted.';
-    else if (oversized.length) nextError = 'Each PDF must be up to 5MB per file.';
+    if (invalidType.length) nextError = 'Only PDF or CSV files are accepted.';
+    else if (oversized.length) nextError = 'Each file must be up to 5MB.';
 
-    const valid = chosen.filter((f) => isPdfFile(f) && f.size <= MAX_STATEMENT_FILE_SIZE_BYTES);
+    const valid = chosen.filter((f) => isSupportedStatementFile(f) && f.size <= MAX_STATEMENT_FILE_SIZE_BYTES);
     const combined = [...files, ...valid].slice(0, MAX_STATEMENTS);
     if (valid.length + files.length > MAX_STATEMENTS) {
       const maxError = `Maximum ${MAX_STATEMENTS} statements. Only the first ${MAX_STATEMENTS} will be used.`;
@@ -49,7 +51,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!files.length) {
-      setError('Please select at least one PDF file.');
+      setError('Please select at least one PDF or CSV file.');
       return;
     }
     setError(null);
@@ -88,7 +90,7 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
     <div className="modal-overlay" onClick={handleOverlayClick}>
       <div className="modal-content modal-content-wide">
         <div className="modal-header">
-          <h2>Upload PDF Statements</h2>
+          <h2>Upload Statements</h2>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -96,18 +98,18 @@ export default function UploadStatementModal({ onClose, onSuccess, onStartUpload
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
             <p className="modal-hint">
-              Select up to {MAX_STATEMENTS} bank statement PDFs (e.g. TD, RBC, Scotia). Each PDF must be up to 5MB.
+              Select up to {MAX_STATEMENTS} bank statement files (PDF or CSV). Each file must be up to 5MB.
             </p>
             <div className="file-input-wrapper">
               <input
                 ref={inputRef}
                 id="statement-file"
                 type="file"
-                accept=".pdf"
+                accept=".pdf,.csv"
                 multiple
                 onChange={handleFileChange}
                 className="file-input"
-                aria-label="Choose PDF files"
+                aria-label="Choose statement files"
               />
               <label htmlFor="statement-file" className="file-input-label">
                 {files.length ? `Add more (${files.length}/${MAX_STATEMENTS})` : 'Choose Files'}

@@ -54,6 +54,14 @@ load_dotenv(dotenv_path=str(env_path), override=True)
 if env_local.exists():
     load_dotenv(dotenv_path=str(env_local), override=True)
 
+def _env_flag_true(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+ENABLE_PASS3 = _env_flag_true("ENABLE_PASS3", default=True)
+
 app = FastAPI()
 
 from .upload_job_redis import job_redis_get, job_redis_setex
@@ -159,6 +167,8 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
             current = idx + 1
             fname = file_item["filename"]
             content = file_item["content"]
+            lower_name = fname.lower()
+            is_csv_file = lower_name.endswith(".csv")
 
             await update_job(
                 job_id, 
@@ -177,26 +187,18 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                     _storage_bucket_created = True
 
                 key_prefix = f"{user_id.strip()}/" if isinstance(user_id, str) and user_id.strip() else ""
-                object_key = f"{key_prefix}{uuid.uuid4()}.pdf"
+                ext = ".csv" if is_csv_file else ".pdf"
+                content_type = "text/csv" if is_csv_file else "application/pdf"
+                object_key = f"{key_prefix}{uuid.uuid4()}{ext}"
                 try:
                     supabase.storage.from_(storage_bucket_name).upload(
-                        object_key, content, {"content-type": "application/pdf"}
+                        object_key, content, {"content-type": content_type}
                     )
                     storage_path = f"{storage_bucket_name}/{object_key}"
                 except Exception as e:
                     logger.warning("Supabase Storage upload failed for %s: %s", fname, e)
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            
             try:
-                # USE A THREAD: Don't block the FastAPI server while parsing the PDF!
-                structured_text = await asyncio.to_thread(pdf_to_structured_text, Path(tmp_path))
-                
-                if not structured_text.strip():
-                    raise RuntimeError("This PDF appears to be scanned images (no extractable text). OCR is coming soon.")
-
                 def _process_extraction(*, extraction, extraction_method: str) -> tuple[list[dict], list[dict], dict]:
                     meta = extraction.model_dump()
                     txns_list = meta.pop("transactions", [])
@@ -216,6 +218,13 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
 
                     transactions = _select_transactions_for_account_type(txns_list, account_type)
                     transactions = _strip_balance_lines(transactions)
+                    if investment_account and holdings_list and transactions:
+                        transactions, dropped = _drop_obvious_holding_copy_transactions(transactions, holdings_list)
+                        if dropped:
+                            logger.info(
+                                "Dropped %d obvious holding-copy transaction(s) for %s (%s)",
+                                dropped, fname, provider,
+                            )
 
                     running_ok = True
                     running_mismatch_count = 0
@@ -256,14 +265,22 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                             <= STATEMENT_BALANCE_TOLERANCE
                         )
 
-                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok
+                    holdings_balance_ok = True
+                    if investment_account:
+                        holdings_balance_ok, _ = _validate_investment_holdings_match_portfolio_balance(
+                            holdings_list,
+                            closing_balance,
+                            filename=fname,
+                        )
+
+                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok and holdings_balance_ok
 
                     for t in transactions:
                         if isinstance(t, dict) and not t.get("currency"):
                             t["currency"] = currency
 
                     logger.info(
-                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
+                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s holdings_balance_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
                         extraction_method,
                         account_type,
                         get_generates_transactions(account_type),
@@ -272,6 +289,7 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                         len(holdings_list),
                         validation_ok,
                         cash_delta_ok if investment_account else True,
+                        holdings_balance_ok if investment_account else True,
                         running_mismatch_count,
                         running_validated_count,
                         closing_ok,
@@ -285,6 +303,7 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                         "closing_ok": closing_ok,
                         "delta_ok": delta_ok,
                         "cash_delta_ok": cash_delta_ok,
+                        "holdings_balance_ok": holdings_balance_ok,
                         "extraction_method": extraction_method,
                         "provider": provider,
                         "account_id_from_stmt": account_id_from_stmt,
@@ -300,41 +319,71 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                     }
                     return transactions, holdings_list, extra
 
-                # Pass 1
-                # USE A THREAD: Don't block the server while Gemini is thinking!
-                extraction1 = await asyncio.to_thread(
-                    extract_statement_from_structured_text, structured_text, model=PASS1_MODEL
-                )
-                transactions, holdings_list, extra = _process_extraction(
-                    extraction=extraction1, extraction_method=f"pdfplumber+{PASS1_MODEL}"
-                )
-
-                # Pass 2 (retry on validation failure)
                 pass2_used = False
                 pass3_used = False
-                if not extra["validation_ok"]:
-                    pass2_used = True
-                    extraction2 = await asyncio.to_thread(
-                        extract_statement_from_structured_text, structured_text, model=PASS2_MODEL
-                    )
+                if is_csv_file:
+                    csv_header_fingerprint = get_csv_header_fingerprint(content)
+                    review_payload = parse_csv_review(content, fname)
+                    grouped = review_payload.get("groups") or []
+                    all_group_txns = []
+                    for group in grouped:
+                        all_group_txns.extend(group.get("transactions") or [])
+                    extraction_csv = await parse_csv(content, fname)
                     transactions, holdings_list, extra = _process_extraction(
-                        extraction=extraction2, extraction_method=f"pdfplumber+{PASS2_MODEL}"
+                        extraction=extraction_csv, extraction_method="csv+header_fingerprint"
                     )
+                    if all_group_txns:
+                        transactions = all_group_txns
+                    if file_item.get("requested_provider"):
+                        extra["provider"] = file_item.get("requested_provider")
+                    extra["csv_header_fingerprint"] = csv_header_fingerprint
+                    extra["csv_account_groups"] = grouped
+                    extra["validation_ok"] = True
+                else:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(content)
+                        tmp_path = tmp.name
+                    try:
+                        # USE A THREAD: Don't block the FastAPI server while parsing the PDF!
+                        structured_text = await asyncio.to_thread(pdf_to_structured_text, Path(tmp_path))
 
-                # Pass 3 (Docling)
-                if not extra["validation_ok"]:
-                    pass3_used = True
-                    from .parsers.schema import StatementExtraction
-                    markdown = await asyncio.to_thread(pdf_to_markdown, Path(tmp_path), filename=fname)
-                    docling_meta, docling_txns, docling_holdings = await asyncio.to_thread(
-                        extract_statement_with_llm, markdown, model=PASS3_INSTRUCTOR_MODEL
-                    )
-                    extraction3 = StatementExtraction.model_validate(
-                        {**docling_meta, "transactions": docling_txns, "holdings": docling_holdings}
-                    )
-                    transactions, holdings_list, extra = _process_extraction(
-                        extraction=extraction3, extraction_method=f"docling+{PASS2_MODEL}"
-                    )
+                        if not structured_text.strip():
+                            raise RuntimeError("This PDF appears to be scanned images (no extractable text). OCR is coming soon.")
+
+                        # Pass 1
+                        extraction1 = await asyncio.to_thread(
+                            extract_statement_from_structured_text, structured_text, model=PASS1_MODEL
+                        )
+                        transactions, holdings_list, extra = _process_extraction(
+                            extraction=extraction1, extraction_method=f"pdfplumber+{PASS1_MODEL}"
+                        )
+
+                        # Pass 2 (retry on validation failure)
+                        if not extra["validation_ok"]:
+                            pass2_used = True
+                            extraction2 = await asyncio.to_thread(
+                                extract_statement_from_structured_text, structured_text, model=PASS2_MODEL
+                            )
+                            transactions, holdings_list, extra = _process_extraction(
+                                extraction=extraction2, extraction_method=f"pdfplumber+{PASS2_MODEL}"
+                            )
+
+                        # Pass 3 (Docling)
+                        if ENABLE_PASS3 and not extra["validation_ok"]:
+                            pass3_used = True
+                            from .parsers.schema import StatementExtraction
+                            markdown = await asyncio.to_thread(pdf_to_markdown, Path(tmp_path), filename=fname)
+                            docling_meta, docling_txns, docling_holdings = await asyncio.to_thread(
+                                extract_statement_with_llm, markdown, model=PASS3_INSTRUCTOR_MODEL
+                            )
+                            extraction3 = StatementExtraction.model_validate(
+                                {**docling_meta, "transactions": docling_txns, "holdings": docling_holdings}
+                            )
+                            transactions, holdings_list, extra = _process_extraction(
+                                extraction=extraction3, extraction_method=f"docling+{PASS2_MODEL}"
+                            )
+                    finally:
+                        Path(tmp_path).unlink(missing_ok=True)
 
                 all_transactions.extend(transactions)
                 files_breakdown.append({
@@ -347,23 +396,26 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                     "opening_cash_balance": extra.get("opening_cash_balance"),
                     "closing_cash_balance": extra.get("closing_cash_balance"),
                     "account_id": extra["account_id_from_stmt"],
+                    "target_account_id": file_item.get("requested_account_id"),
+                    "target_provider": file_item.get("requested_provider"),
                     "account_type": extra["account_type"],
                     "provider": extra["provider"],
                     "currency": extra["currency"],
                     "start_date": extra["start_date"],
                     "end_date": extra["end_date"],
+                    "csv_header_fingerprint": extra.get("csv_header_fingerprint"),
+                    "account_groups": extra.get("csv_account_groups") or [],
                     "storage_path": storage_path,
                     "extraction_method": extra.get("extraction_method"),
                     "retry_pass_2_used": pass2_used,
                     "retry_pass_3_used": pass3_used,
                     "validation_ok": extra.get("validation_ok"),
                     "cash_delta_ok": extra.get("cash_delta_ok"),
+                    "holdings_balance_ok": extra.get("holdings_balance_ok"),
                 })
 
             except Exception as e:
                 raise RuntimeError(f"Failed to parse '{fname}': {e}") from e
-            finally:
-                Path(tmp_path).unlink(missing_ok=True)
 
         # --- Final Categorization & Wrap Up ---
         await update_job(job_id, status="analyzing", message="Categorizing transactions...")
@@ -375,7 +427,7 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
         final_result = {
             "transactions": all_transactions,
             "analysis": analysis,
-            "source": "pdf",
+            "source": "statement_upload",
             "files": files_breakdown,
             "processing_summary": {
                 "transactions_categorized": cat_count,
@@ -406,9 +458,11 @@ async def upload_statement(
     form = await request.form()
     statements = form.getlist("statements") or form.getlist("statement")
     statements = [s for s in statements if s and hasattr(s, "read")]
+    requested_account_id = form.get("account_id")
+    requested_provider = form.get("provider")
 
     if not statements:
-        raise HTTPException(status_code=400, detail="At least one PDF file is required")
+        raise HTTPException(status_code=400, detail="At least one statement file (PDF or CSV) is required")
     if len(statements) > MAX_STATEMENTS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_STATEMENTS} statements allowed")
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
@@ -421,18 +475,22 @@ async def upload_statement(
     file_data = []
     for stmt in statements:
         fname = stmt.filename or "statement.pdf"
-        if not fname.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail=f"Only PDF files accepted. '{fname}' is not a PDF.")
+        is_csv_file = fname.lower().endswith(".csv")
+        is_pdf_file = fname.lower().endswith(".pdf")
+        if not (is_pdf_file or is_csv_file):
+            raise HTTPException(status_code=400, detail=f"Only PDF and CSV files accepted. '{fname}' is not supported.")
         content = await stmt.read(MAX_STATEMENT_FILE_SIZE_BYTES + 1)
         if len(content) > MAX_STATEMENT_FILE_SIZE_BYTES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Each PDF must be up to 5MB per file. '{fname}' is too large.",
+                detail=f"Each statement file must be up to 5MB. '{fname}' is too large.",
             )
         file_data.append({
             "filename": fname,
             "content": content,
-            "content_sha256": _pdf_content_sha256_hex(content),
+            "content_sha256": _statement_content_sha256_hex(content),
+            "requested_account_id": requested_account_id,
+            "requested_provider": requested_provider,
         })
 
     skipped_duplicates: list[dict] = []
@@ -451,7 +509,7 @@ async def upload_statement(
         raise HTTPException(
             status_code=409,
             detail={
-                "message": "All selected PDFs were already uploaded.",
+                "message": "All selected statements were already uploaded.",
                 "duplicate_filenames": names,
             },
         )
@@ -695,6 +753,7 @@ from .parsers.pdfplumber_parser import (
     pdf_to_structured_text,
 )
 from .parsers.account_types_ref import get_valid_account_type_names, get_generates_transactions, get_plaid_type
+from .parsers.csv_parser import get_csv_header_fingerprint, parse_csv, parse_csv_review
 from .utils.categorization import categorize_transaction, forced_category_from_description, get_category_by_name
 from .utils.priority_rules import override_category_from_description
 from .utils.tags import normalize_tags
@@ -703,11 +762,22 @@ try:
 except ImportError:
     supabase = None
 
-# CORS: localhost for dev, Vercel for deployed frontend (same-origin when both on Vercel)
-_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+# CORS: localhost for dev, Vercel for deployed frontend, plus optional explicit custom domains.
+_cors_origins = {"http://localhost:3000", "http://127.0.0.1:3000"}
 for env_var in ("VERCEL_URL", "VERCEL_BRANCH_URL"):
     if url := os.environ.get(env_var):
-        _cors_origins.append(f"https://{url}")
+        _cors_origins.add(f"https://{url}")
+
+# Optional: comma-separated list, e.g.
+# CORS_ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com
+_cors_allowed_from_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+for raw in _cors_allowed_from_env.split(","):
+    origin = raw.strip().rstrip("/")
+    if origin:
+        _cors_origins.add(origin)
+
+_cors_origins = sorted(_cors_origins)
+logger.info("CORS allow_origins configured: %s", _cors_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -890,6 +960,101 @@ def _is_balance_line(description: str | None) -> bool:
 def _strip_balance_lines(transactions: list[dict]) -> list[dict]:
     """Remove synthetic opening/closing balance entries the LLM sometimes produces."""
     return [t for t in transactions if not _is_balance_line(t.get("description"))]
+
+
+def _drop_obvious_holding_copy_transactions(
+    transactions: list[dict],
+    holdings: list[dict],
+) -> tuple[list[dict], int]:
+    """
+    Drop transactions that are almost certainly holdings rows copied into transactions[].
+
+    Heuristic (high precision):
+    - transaction absolute amount ~= holding total_value (within small tolerance), AND
+    - transaction description matches holding symbol token OR holding name substring.
+    """
+    if not transactions or not holdings:
+        return transactions, 0
+
+    def _norm_text(s: str) -> str:
+        # Lowercase, keep alnum+spaces, collapse whitespace
+        cleaned = "".join(ch.lower() if ch.isalnum() else (" " if ch.isspace() else " ") for ch in (s or ""))
+        return " ".join(cleaned.split())
+
+    holdings_index: list[dict[str, object]] = []
+    for h in holdings:
+        if not isinstance(h, dict):
+            continue
+        try:
+            total_value = float(h.get("total_value", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if total_value <= 0:
+            continue
+        symbol = (h.get("asset_symbol") or "").strip()
+        name = (h.get("asset_name") or "").strip()
+        holdings_index.append(
+            {
+                "total_value": float(total_value),
+                "symbol_upper": symbol.upper() if isinstance(symbol, str) else "",
+                "name_norm": _norm_text(name) if isinstance(name, str) else "",
+            }
+        )
+
+    if not holdings_index:
+        return transactions, 0
+
+    def _amount_matches(a: float, b: float) -> bool:
+        # absolute: pennies; relative: 0.1% for large values
+        diff = abs(a - b)
+        return diff <= 0.02 or diff <= max(0.02, 0.001 * max(abs(a), abs(b)))
+
+    kept: list[dict] = []
+    dropped = 0
+    for t in transactions:
+        if not isinstance(t, dict):
+            kept.append(t)
+            continue
+        desc = str(t.get("description") or "")
+        try:
+            amt = abs(float(t.get("amount", 0) or 0))
+        except (TypeError, ValueError):
+            kept.append(t)
+            continue
+        if amt <= 0:
+            kept.append(t)
+            continue
+
+        desc_upper = desc.upper()
+        desc_norm = _norm_text(desc)
+
+        is_holding_copy = False
+        for h in holdings_index:
+            hv = float(h["total_value"])  # type: ignore[arg-type]
+            if not _amount_matches(amt, hv):
+                continue
+
+            sym = str(h.get("symbol_upper") or "")
+            name_norm = str(h.get("name_norm") or "")
+
+            sym_match = False
+            if sym and sym != "CASH":
+                # token-ish match: " XEQT " etc.
+                padded = f" {desc_upper} "
+                sym_match = f" {sym} " in padded
+
+            name_match = bool(name_norm and name_norm in desc_norm and len(name_norm) >= 6)
+
+            if sym_match or name_match:
+                is_holding_copy = True
+                break
+
+        if is_holding_copy:
+            dropped += 1
+        else:
+            kept.append(t)
+
+    return kept, dropped
 
 
 def _select_transactions_for_account_type(txns_list: list, account_type: str) -> list[dict]:
@@ -1140,6 +1305,38 @@ def _validate_opening_plus_delta_equals_closing(
 
     return delta_ok, transaction_delta, expected_closing
 
+
+def _validate_investment_holdings_match_portfolio_balance(
+    holdings: list[dict],
+    closing_balance: float | None,
+    filename: str = "",
+) -> tuple[bool, float | None]:
+    """Validate investment portfolio closing balance against summed holdings."""
+    if closing_balance is None or not holdings:
+        return True, None
+
+    holdings_total = round(sum(float(h.get("total_value", 0) or 0) for h in holdings), 2)
+    closing_for_check = round(float(closing_balance), 2)
+    holdings_ok = abs(holdings_total - closing_for_check) <= STATEMENT_BALANCE_TOLERANCE
+
+    if holdings_ok:
+        logger.info(
+            "Investment holdings validation passed for %s: holdings_total=%.2f closing_balance=%.2f",
+            filename,
+            holdings_total,
+            closing_for_check,
+        )
+    else:
+        logger.warning(
+            "Investment holdings validation failed for %s: holdings_total=%.2f closing_balance=%.2f diff=%.2f",
+            filename,
+            holdings_total,
+            closing_for_check,
+            holdings_total - closing_for_check,
+        )
+
+    return holdings_ok, holdings_total
+
 # Legacy synchronous endpoint kept for compatibility/testing.
 @app.post("/api/upload_statement_old")
 async def upload_statement_old(request: Request):
@@ -1244,6 +1441,13 @@ async def upload_statement_old(request: Request):
 
                     transactions = _select_transactions_for_account_type(txns_list, account_type)
                     transactions = _strip_balance_lines(transactions)
+                    if investment_account and holdings_list and transactions:
+                        transactions, dropped = _drop_obvious_holding_copy_transactions(transactions, holdings_list)
+                        if dropped:
+                            logger.info(
+                                "Dropped %d obvious holding-copy transaction(s) for %s (%s)",
+                                dropped, fname, provider,
+                            )
 
                     running_ok = True
                     running_mismatch_count = 0
@@ -1286,7 +1490,15 @@ async def upload_statement_old(request: Request):
                             <= STATEMENT_BALANCE_TOLERANCE
                         )
 
-                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok
+                    holdings_balance_ok = True
+                    if investment_account:
+                        holdings_balance_ok, _ = _validate_investment_holdings_match_portfolio_balance(
+                            holdings_list,
+                            closing_balance,
+                            filename=fname,
+                        )
+
+                    validation_ok = running_ok and closing_ok and delta_ok and cash_delta_ok and holdings_balance_ok
 
                     # Stamp statement currency onto each extracted transaction for UI formatting
                     for t in transactions:
@@ -1294,7 +1506,7 @@ async def upload_statement_old(request: Request):
                             t["currency"] = currency
 
                     logger.info(
-                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
+                        "LLM extraction: method=%s account_type=%s generates_txns=%s investment=%s txns=%d holdings=%d validation_ok=%s cash_delta_ok=%s holdings_balance_ok=%s (running_mismatches=%d, validated=%d, closing_ok=%s, delta_ok=%s)",
                         extraction_method,
                         account_type,
                         get_generates_transactions(account_type),
@@ -1303,6 +1515,7 @@ async def upload_statement_old(request: Request):
                         len(holdings_list),
                         validation_ok,
                         cash_delta_ok if investment_account else True,
+                        holdings_balance_ok if investment_account else True,
                         running_mismatch_count,
                         running_validated_count,
                         closing_ok,
@@ -1316,6 +1529,7 @@ async def upload_statement_old(request: Request):
                         "closing_ok": closing_ok,
                         "delta_ok": delta_ok,
                         "cash_delta_ok": cash_delta_ok,
+                        "holdings_balance_ok": holdings_balance_ok,
                         "extraction_method": extraction_method,
                         "provider": provider,
                         "account_id_from_stmt": account_id_from_stmt,
@@ -1356,7 +1570,7 @@ async def upload_statement_old(request: Request):
                     )
 
                 # Pass 3 (docling markdown + stronger Gemini) if still failing validation
-                if not extra["validation_ok"]:
+                if ENABLE_PASS3 and not extra["validation_ok"]:
                     pass3_used = True
                     from .parsers.schema import StatementExtraction
 
@@ -1407,6 +1621,7 @@ async def upload_statement_old(request: Request):
                 "retry_pass_3_used": pass3_used,
                 "validation_ok": extra.get("validation_ok"),
                 "cash_delta_ok": extra.get("cash_delta_ok"),
+                "holdings_balance_ok": extra.get("holdings_balance_ok"),
             })
         except Exception as e:
             logger.exception("Failed to parse %s: %s", fname, e)
@@ -1531,16 +1746,16 @@ async def get_plaid_transactions(
     payload: dict = Body(...),
     authorization: str = Header(None, alias="Authorization"),
 ):
-    """Fetch transactions from Plaid. Prefer item_id + Bearer (server looks up access_token); legacy body access_token still supported."""
-    access_token = payload.get("access_token")
+    """Fetch transactions from Plaid using item_id + Bearer token only."""
+    if payload.get("access_token"):
+        return {"error": "access_token in request body is no longer supported. Use item_id with Authorization Bearer token."}
     item_id = payload.get("item_id")
-    if item_id and not access_token:
-        user_id = _get_user_from_token(authorization)
-        access_token = _get_plaid_access_token_for_item(user_id, str(item_id))
-        if not access_token:
-            return {"error": "Unknown item_id or bank link not found for this account."}
+    if not item_id:
+        return {"error": "item_id is required."}
+    user_id = _get_user_from_token(authorization)
+    access_token = _get_plaid_access_token_for_item(user_id, str(item_id))
     if not access_token:
-        return {"error": "Provide item_id with Authorization Bearer token, or access_token (legacy)."}
+        return {"error": "Unknown item_id or bank link not found for this account."}
     end = date.today()
     start = end - timedelta(days=90)
     try:
@@ -2005,6 +2220,124 @@ def _get_or_create_account_by_provider_and_number(
     return ins.data[0]["id"]
 
 
+def _default_subtype_for_plaid_type(account_type_guess: str | None) -> str:
+    mapping = {
+        "depository": "Chequing",
+        "credit": "Credit Card",
+        "investment": "TFSA",
+        "loan": "Line of Credit",
+    }
+    return mapping.get((account_type_guess or "").strip().lower(), "Chequing")
+
+
+def _get_or_create_shadow_account(
+    user_id: str,
+    provider: str,
+    account_type_guess: str,
+    account_subtype_guess: str | None = None,
+) -> tuple[str, bool]:
+    """Resolve a CSV account when account number is missing.
+
+    Returns (account_id, is_shadow_account).
+    """
+    guessed_type = (account_type_guess or "depository").strip().lower()
+    valid_subtypes = get_valid_account_type_names()
+    subtype = (account_subtype_guess or "").strip()
+    if subtype not in valid_subtypes:
+        subtype = _default_subtype_for_plaid_type(guessed_type)
+
+    query = supabase.table("accounts").select("id, account_subtype").eq("user_id", user_id)
+    if provider:
+        query = query.eq("provider", provider)
+    query = query.eq("account_type", guessed_type)
+    rows = (query.execute().data or [])
+    if subtype:
+        subtype_rows = [r for r in rows if (r.get("account_subtype") or "").strip() == subtype]
+        if len(subtype_rows) == 1 and subtype_rows[0].get("id"):
+            return subtype_rows[0]["id"], False
+        if not subtype_rows:
+            pass
+        elif len(subtype_rows) > 1:
+            rows = subtype_rows
+    if len(rows) == 1 and rows[0].get("id"):
+        return rows[0]["id"], False
+
+    provider_label = provider or "Unknown Provider"
+    label = subtype or guessed_type or "depository"
+    account_number = f"CSV-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
+    ins = supabase.table("accounts").insert({
+        "user_id": user_id,
+        "name": f"Unlinked {provider_label} {label}",
+        "provider": provider,
+        "account_number": account_number,
+        "account_type": guessed_type,
+        "account_subtype": subtype,
+    }).execute()
+    if not ins or not (getattr(ins, "data", None) and len(ins.data) > 0):
+        raise RuntimeError("Failed to create shadow account: no data returned from Supabase")
+    return ins.data[0]["id"], True
+
+
+def _get_account_provider(account_id: str, user_id: str) -> str | None:
+    try:
+        resp = supabase.table("accounts").select("provider").eq("id", account_id).eq("user_id", user_id).limit(1).execute()
+        rows = getattr(resp, "data", None) or []
+        if rows and rows[0].get("provider"):
+            return rows[0]["provider"]
+    except Exception:
+        pass
+    return None
+
+
+def _update_csv_registry_provider_feedback(
+    *,
+    header_fingerprint: str | None,
+    resolved_provider: str,
+    guessed_provider: str | None,
+    resolved_account_type_guess: str | None = None,
+    resolved_account_subtype_guess: str | None = None,
+    guessed_account_type_guess: str | None = None,
+    guessed_account_subtype_guess: str | None = None,
+) -> None:
+    if not supabase or not header_fingerprint or not resolved_provider:
+        return
+    try:
+        update_payload = {
+            "provider_guess": resolved_provider,
+            "last_used_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if resolved_account_type_guess:
+            update_payload["account_type_guess"] = resolved_account_type_guess
+        if resolved_account_subtype_guess:
+            update_payload["account_subtype_guess"] = resolved_account_subtype_guess
+        guessed = (guessed_provider or "").strip().lower()
+        resolved = resolved_provider.strip().lower()
+        guessed_type = (guessed_account_type_guess or "").strip().lower()
+        resolved_type = (resolved_account_type_guess or "").strip().lower()
+        guessed_subtype = (guessed_account_subtype_guess or "").strip().lower()
+        resolved_subtype = (resolved_account_subtype_guess or "").strip().lower()
+        if (
+            (guessed and guessed != resolved)
+            or (guessed_type and resolved_type and guessed_type != resolved_type)
+            or (guessed_subtype and resolved_subtype and guessed_subtype != resolved_subtype)
+        ):
+            current = (
+                supabase.table("csv_mapping_registry")
+                .select("correction_count")
+                .eq("header_fingerprint", header_fingerprint)
+                .limit(1)
+                .execute()
+            )
+            rows = getattr(current, "data", None) or []
+            prior = int((rows[0].get("correction_count") if rows else 0) or 0)
+            update_payload["correction_count"] = prior + 1
+        supabase.table("csv_mapping_registry").update(update_payload).eq(
+            "header_fingerprint", header_fingerprint
+        ).execute()
+    except Exception as e:
+        logger.warning("Failed to update csv mapping registry provider feedback: %s", e)
+
+
 def _update_account_number(account_id: str, account_number: str, user_id: str) -> None:
     """Set account_number on the account row when we have an extracted value from a statement."""
     an = _normalize_account_number(account_number)
@@ -2165,6 +2498,52 @@ def _statement_open_close_from_balances(
     return opening, closing
 
 
+def _statement_balance_pairs(
+    statement: dict,
+    statement_balance_rows: list[dict],
+    balance_kind: str,
+) -> list[dict]:
+    """Return [{currency, opening, closing}, ...] grouped by currency for display."""
+    rows = _balance_rows_for_kind(statement_balance_rows, balance_kind)
+    if not rows:
+        return []
+
+    by_currency: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        cur = (r.get("currency") or "CAD").upper()
+        by_currency[cur].append(r)
+
+    start_date = str(statement.get("start_date")) if statement.get("start_date") else None
+    end_date = str(statement.get("end_date")) if statement.get("end_date") else None
+
+    pairs: list[dict] = []
+    for currency, cur_rows in sorted(by_currency.items()):
+        sorted_rows = sorted(cur_rows, key=lambda r: str(r.get("date") or ""))
+        opening: float | None = None
+        closing: float | None = None
+
+        if start_date:
+            for row in sorted_rows:
+                if str(row.get("date")) == start_date:
+                    opening = _to_float_or_none(row.get("amount"))
+                    break
+        if end_date:
+            for row in sorted_rows:
+                if str(row.get("date")) == end_date:
+                    closing = _to_float_or_none(row.get("amount"))
+                    break
+
+        if opening is None and sorted_rows:
+            opening = _to_float_or_none(sorted_rows[0].get("amount"))
+        if closing is None and sorted_rows:
+            closing = _to_float_or_none(sorted_rows[-1].get("amount"))
+
+        if opening is not None or closing is not None:
+            pairs.append({"currency": currency, "opening": opening, "closing": closing})
+
+    return pairs
+
+
 def _annotate_statement_validation(
     statements: list[dict],
     accounts: list[dict],
@@ -2239,6 +2618,11 @@ def _annotate_statement_validation(
             or (cash_validation_applicable and cash_balances_reconciled and all_reviewed)
         )
 
+        if is_investment:
+            statement["balance_pairs"] = _statement_balance_pairs(statement, stmt_bal_rows, "cash_only")
+        else:
+            statement["balance_pairs"] = _statement_balance_pairs(statement, stmt_bal_rows, "statement")
+
 
 def _get_user_from_token(authorization: str = None):
     """Extract and verify Supabase JWT, return user_id. Supports both JWKS (ES256/RS256) and legacy HS256."""
@@ -2282,7 +2666,7 @@ def _get_user_id_optional(authorization: str | None) -> str | None:
         return None
 
 
-def _pdf_content_sha256_hex(content: bytes) -> str:
+def _statement_content_sha256_hex(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
@@ -2891,10 +3275,44 @@ async def save_statements(
     if not isinstance(items, list) or not items:
         raise HTTPException(status_code=400, detail="statements must be a non-empty list of {filename, transactions, provider?, account_id?, ...}")
     try:
+        expanded_items = []
+        for item in items:
+            groups = item.get("account_groups") if isinstance(item, dict) else None
+            if isinstance(groups, list) and groups:
+                for idx, group in enumerate(groups):
+                    merged = {
+                        "filename": item.get("filename") or f"statement-group-{idx + 1}.csv",
+                        "storage_path": item.get("storage_path"),
+                        "content_sha256": item.get("content_sha256"),
+                        "csv_header_fingerprint": item.get("csv_header_fingerprint"),
+                        "transactions": group.get("transactions") or [],
+                        "holdings": group.get("holdings") or [],
+                        "opening_balance": group.get("opening_balance"),
+                        "closing_balance": group.get("closing_balance"),
+                        "start_date": group.get("start_date"),
+                        "end_date": group.get("end_date"),
+                        "currency": group.get("currency_guess") or item.get("currency") or "CAD",
+                        "provider": group.get("provider"),
+                        "account_type": group.get("account_subtype"),
+                        "account_type_guess": group.get("account_type_guess"),
+                        "account_subtype_guess": group.get("account_subtype"),
+                        "account_number": group.get("account_number"),
+                        "target_account_id": group.get("target_account_id"),
+                        "target_provider": group.get("provider"),
+                    }
+                    expanded_items.append(merged)
+            else:
+                expanded_items.append(item)
+        items = expanded_items
+
         storage_bucket_name = os.environ.get("STATEMENT_PDF_BUCKET", "statement-pdfs")
         all_txn_rows = []
         cat_count = 0
         flagged_count = 0
+        # One CSV file → many account_groups → many expanded rows sharing the same content_sha256.
+        # user_statements has a unique (user_id, content_sha256); only the first row per hash in
+        # this request may store the fingerprint so later groups can insert separate statement rows.
+        content_sha256_used_this_save: set[str] = set()
 
         for item in items:
             # IMPORTANT: This tracking must be scoped to the current statement item.
@@ -2905,12 +3323,32 @@ async def save_statements(
             if not isinstance(txns, list):
                 txns = []
 
-            provider = item.get("provider") or "Unknown"
+            is_csv_item = str(fn).lower().endswith(".csv") or bool(item.get("csv_header_fingerprint"))
+            if is_csv_item:
+                missing_fields = []
+                if not (item.get("provider") or item.get("target_provider")):
+                    missing_fields.append("provider")
+                if not item.get("account_type"):
+                    missing_fields.append("account_type")
+                if not item.get("account_number") and not item.get("target_account_id"):
+                    missing_fields.append("account_number")
+                if missing_fields:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"CSV review confirmation required: missing {', '.join(missing_fields)}",
+                    )
+
+            guessed_provider = item.get("provider") or "Unknown"
+            explicit_provider = (item.get("target_provider") or "").strip() if isinstance(item.get("target_provider"), str) else ""
+            provider = explicit_provider or guessed_provider
+            explicit_account_id = (item.get("target_account_id") or "").strip() if isinstance(item.get("target_account_id"), str) else ""
             account_number = _normalize_account_number(
-                item.get("account_id") or item.get("account_number")
+                item.get("account_number") or item.get("account_id")
             )
             account_subtype = item.get("account_type") or "Chequing"
             plaid_type = get_plaid_type(account_subtype) or "depository"
+            account_type_guess = (item.get("account_type_guess") or plaid_type or "depository").strip().lower()
+            account_subtype_guess = item.get("account_subtype_guess") or account_subtype
             currency = item.get("currency") or "CAD"
             start_date = item.get("start_date")
             end_date = item.get("end_date")
@@ -2925,9 +3363,28 @@ async def save_statements(
                 if valid_dates:
                     end_date = max(valid_dates)
 
-            account_id = _get_or_create_account_by_provider_and_number(
-                user_id, provider, account_number, account_subtype, currency
-            )
+            if explicit_account_id:
+                account_id = explicit_account_id
+                is_shadow_account = False
+            else:
+                is_csv_file = str(fn).lower().endswith(".csv")
+                if is_csv_file and not account_number:
+                    account_id, is_shadow_account = _get_or_create_shadow_account(
+                        user_id=user_id,
+                        provider=provider,
+                        account_type_guess=account_type_guess,
+                        account_subtype_guess=account_subtype_guess,
+                    )
+                else:
+                    account_id = _get_or_create_account_by_provider_and_number(
+                        user_id, provider, account_number, account_subtype, currency
+                    )
+                    is_shadow_account = False
+
+            if not explicit_provider:
+                account_provider = _get_account_provider(account_id, user_id)
+                if account_provider:
+                    provider = account_provider
 
             if get_generates_transactions(account_subtype) or (
                 plaid_type == "investment" and txns
@@ -2953,7 +3410,20 @@ async def save_statements(
             if isinstance(raw_hash, str):
                 h = raw_hash.strip().lower()
                 if len(h) == 64 and re.fullmatch(r"[0-9a-f]{64}", h):
-                    stmt_row["content_sha256"] = h
+                    if h not in content_sha256_used_this_save:
+                        stmt_row["content_sha256"] = h
+                        content_sha256_used_this_save.add(h)
+
+            if str(fn).lower().endswith(".csv"):
+                _update_csv_registry_provider_feedback(
+                    header_fingerprint=item.get("csv_header_fingerprint"),
+                    resolved_provider=provider,
+                    guessed_provider=guessed_provider,
+                    resolved_account_type_guess=account_type_guess,
+                    resolved_account_subtype_guess=account_subtype_guess,
+                    guessed_account_type_guess=item.get("account_type_guess"),
+                    guessed_account_subtype_guess=item.get("account_subtype_guess"),
+                )
             stmt_ins = supabase.table("user_statements").insert(stmt_row).execute()
             if not stmt_ins or not (getattr(stmt_ins, "data", None) and len(stmt_ins.data) > 0):
                 raise RuntimeError("Failed to insert user_statement: no data returned from Supabase")
@@ -3069,9 +3539,9 @@ async def save_statements(
                     "amount": amount_rounded,
                     "category": txn.get("category"),
                     "is_fixed_cost": txn.get("is_fixed_cost", False),
-                    "needs_review": txn.get("needs_review", False),
+                    "needs_review": bool(txn.get("needs_review", False) or is_shadow_account),
                     "occurrence_index": occurrence_index,
-                    "currency": currency,
+                    "currency": (txn.get("currency") or currency or "CAD"),
                 }
                 all_txn_rows.append(txn_row)
 
@@ -3205,7 +3675,7 @@ async def delete_statement(statement_id: str, authorization: str = Header(None, 
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind, currency").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
@@ -3277,7 +3747,7 @@ async def bulk_delete_statements(body: dict = Body(...), authorization: str = He
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind, currency").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 
@@ -3321,7 +3791,7 @@ async def rerun_analysis(authorization: str = Header(None, alias="Authorization"
                 tx_by_stmt[sid].append(_db_txn_to_analysis(t))
         for s in statements:
             s["transactions"] = tx_by_stmt.get(s["id"], [])
-        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind").eq("user_id", user_id).execute()
+        bal_resp = supabase.table("balances").select("statement_id, date, amount, balance_kind, currency").eq("user_id", user_id).execute()
         balance_rows = getattr(bal_resp, "data", None) or []
         _annotate_statement_validation(statements, accounts, db_transactions, balance_rows)
 

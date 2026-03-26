@@ -12,11 +12,9 @@ import SubprocessorsPage from './pages/legal/SubprocessorsPage';
 import DashboardShell from './components/DashboardShell';
 import DashboardTab from './pages/dashboard/DashboardTab';
 import WealthTab from './pages/dashboard/WealthTab';
-import CashflowTab from './pages/dashboard/CashflowTab';
+import SpendingIncomeTab from './pages/dashboard/SpendingIncomeTab';
 import DataEditorTab from './pages/dashboard/DataEditorTab';
 import ProfileTab from './pages/dashboard/ProfileTab';
-import './App.css';
-
 function LandingRoute() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
@@ -38,7 +36,7 @@ function ProtectedDashboard() {
   const { isAuthenticated, loading } = useAuth();
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#020617] flex items-center justify-center text-white">
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-50">
         Loading...
       </div>
     );
@@ -65,7 +63,8 @@ function App() {
             <Route path="/dashboard" element={<ProtectedDashboard />}>
               <Route index element={<DashboardTab />} />
               <Route path="wealth" element={<WealthTab />} />
-              <Route path="cashflow" element={<CashflowTab />} />
+              <Route path="spending-income" element={<SpendingIncomeTab />} />
+              <Route path="cashflow" element={<Navigate to="/dashboard/spending-income" replace />} />
               <Route path="data-editor" element={<DataEditorTab />} />
               <Route path="profile" element={<ProfileTab />} />
             </Route>

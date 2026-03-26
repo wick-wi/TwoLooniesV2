@@ -47,6 +47,22 @@ create unique index if not exists user_statements_user_id_content_sha256_uniq
   where content_sha256 is not null;
 
 -- ==========================================
+-- 3a. CSV MAPPING REGISTRY (Global cache for AI CSV schemas)
+-- ==========================================
+create table if not exists public.csv_mapping_registry (
+  id uuid default gen_random_uuid() primary key,
+  header_fingerprint text unique not null,
+  provider_guess text,
+  account_type_guess text check (account_type_guess in ('depository', 'credit', 'investment', 'loan')),
+  account_subtype_guess text,
+  mapping_schema jsonb not null,
+  correction_count integer not null default 0,
+  last_used_at timestamptz default now(),
+  created_at timestamptz default now()
+);
+create index if not exists csv_mapping_registry_header_idx on public.csv_mapping_registry (header_fingerprint);
+
+-- ==========================================
 -- 3b. BALANCES (Point-in-time account value; event-driven ledger)
 -- ==========================================
 create table if not exists public.balances (

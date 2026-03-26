@@ -6,7 +6,9 @@
     "If the statement provider is Royal Bank of Canada (RBC), be aware that same-day transactions often leave the Date column blank. For RBC statements ONLY: If a row has text followed by a large gap of spaces and then a standalone currency amount aligned to the right, that is a separate transaction. Inherit the date from above. Do NOT apply this whitespace rule to any other bank or to reference numbers/exchange rates.",
     "For investment accounts: classify stock, ETF, mutual fund, and option buy/sell transactions as 'Securities Trading'. Use 'Bank & broker fees' only for explicit fees, commissions, FX charges, margin interest, and management fees—not for the principal trade amount.",
     "Use 'Self-Transfer' when money moves between the user's own accounts or products at the same institution (for example cash to investing, savings to brokerage, or internal Wealthsimple/Questrade bucket moves like 'Investment WSInvestments'). That is not spending, not a security trade, and not a fee line.",
-    "Do not classify internal transfers or cash movement between the user's own accounts as 'Bank & broker fees'. Reserve 'Bank & broker fees' for lines that are clearly a charge or fee."
+    "Do not classify internal transfers or cash movement between the user's own accounts as 'Bank & broker fees'. Reserve 'Bank & broker fees' for lines that are clearly a charge or fee.",
+    "For investment/brokerage statements only: rows under HOLDINGS / POSITIONS / PORTFOLIO / ACCOUNT HOLDINGS are NOT transactions. Do NOT copy holdings rows into transactions[]. Those rows must only appear in holdings[].",
+    "For Investment/Brokerage statements only: Only include items in transactions[] that come from an activity/transactions/trades ledger that represents cash movement (buys, sells, contributions, withdrawals, dividends paid to cash, fees). If the statement has no such ledger, return transactions: []"
   ],
   "override_rules": [
     {

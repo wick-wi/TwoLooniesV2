@@ -14,11 +14,9 @@ from typing import Any
 
 import pdfplumber
 
-from .docling_statement import (
-    StatementExtraction,
-    _allowed_account_types_prompt_suffix,
-    _allowed_category_names_prompt_suffix,
-)
+from .schema import StatementExtraction
+from .prompts import build_core_extraction_prompt
+
 try:
     from api.utils.priority_rules import get_prompt_rules_text
 except ImportError:  # pragma: no cover
@@ -68,41 +66,44 @@ def _table_to_markdown(table: list[list[str | None]]) -> str:
 def _extract_page_content(page: pdfplumber.page.Page) -> str:
     """
     Extract structured content from a single PDF page.
-
-    Strategy: detect tables first, render them as markdown tables (preserving
-    column associations), then extract the remaining non-table text to capture
-    headers, section labels, and metadata that live outside tables.
+    
+    Strategy: Sort tables by vertical position, then interleave the 
+    non-table text (headers/metadata) and markdown tables top-to-bottom 
+    so the LLM retains contextual reading order.
     """
     parts: list[str] = []
-
     tables = page.find_tables()
-
-    # Collect non-table text by filtering out table bounding boxes
-    if tables:
-        table_bboxes = [t.bbox for t in tables]
-
-        def not_in_table(obj: dict[str, Any]) -> bool:
-            for bbox in table_bboxes:
-                if (obj["x0"] >= bbox[0] - 2 and obj["top"] >= bbox[1] - 2
-                        and obj["x1"] <= bbox[2] + 2 and obj["bottom"] <= bbox[3] + 2):
-                    return False
-            return True
-
-        filtered_page = page.filter(not_in_table)
-        text = filtered_page.extract_text(layout=True)
-        if text and text.strip():
-            parts.append(text.strip())
-    else:
-        text = page.extract_text(layout=True)
-        if text and text.strip():
-            parts.append(text.strip())
-
+    
+    # Sort tables from top to bottom based on their y0 (top) coordinate
+    tables = sorted(tables, key=lambda t: t.bbox[1])
+    
+    current_top = 0
     for table in tables:
+        # Extract text above the current table
+        # bbox = (x0, top, x1, bottom)
+        bbox_above = (0, current_top, page.width, table.bbox[1])
+        # Crop can sometimes fail if top >= bottom, so guard it
+        if bbox_above[3] > bbox_above[1]: 
+            text_above = page.crop(bbox_above).extract_text(layout=True)
+            if text_above and text_above.strip():
+                parts.append(text_above.strip())
+        
+        # Append the markdown table
         extracted = table.extract()
         if extracted:
             md = _table_to_markdown(extracted)
             if md:
                 parts.append(md)
+        
+        # Move our top coordinate down past this table
+        current_top = table.bbox[3]
+
+    # Extract any remaining text below the very last table
+    if current_top < page.height:
+        bbox_below = (0, current_top, page.width, page.height)
+        text_below = page.crop(bbox_below).extract_text(layout=True)
+        if text_below and text_below.strip():
+            parts.append(text_below.strip())
 
     return "\n\n".join(parts)
 
@@ -126,6 +127,23 @@ def pdf_to_structured_text(pdf_path: Path) -> str:
     return "\n\n".join(sections)
 
 
+_PDFPLUMBER_MODALITY = (
+    "The document has been converted to text with tables preserved as markdown tables.\n"
+    "\n"
+    "IMPORTANT: The document may span multiple pages and contain multiple sub-accounts\n"
+    "or sections (e.g. CAD cash, USD cash, investments). You MUST extract data from\n"
+    "ALL pages and ALL sections, combining them into a single result.\n"
+    "\n"
+    "The text preserves table structure: columns in markdown tables map directly to\n"
+    "data fields (e.g. Date | Description | Amount). Use column headers to determine\n"
+    "which numbers are amounts, balances, quantities, etc.\n"
+    "\n"
+    "CRITICAL: Pay close attention to text headers immediately preceding tables "
+    "(e.g. 'CAD Activity' vs 'USD Activity') or table column headers to correctly "
+    "assign the currency for the transactions within that specific table."
+)
+
+
 def _build_pdfplumber_prompt() -> str:
     priority = ""
     if get_prompt_rules_text:
@@ -133,84 +151,7 @@ def _build_pdfplumber_prompt() -> str:
             priority = (get_prompt_rules_text() or "").strip()
         except Exception:
             priority = ""
-    priority_section = (priority + "\n") if priority else ""
-
-    return (
-        "You are extracting structured data from a bank/financial statement.\n"
-        "The document has been converted to text with tables preserved as markdown tables.\n"
-        "Return ONLY valid JSON matching the provided schema.\n"
-        "\n"
-        "IMPORTANT: The document may span multiple pages and contain multiple sub-accounts\n"
-        "or sections (e.g. CAD cash, USD cash, investments). You MUST extract data from\n"
-        "ALL pages and ALL sections, combining them into a single result.\n"
-        "\n"
-        "The text preserves table structure: columns in markdown tables map directly to\n"
-        "data fields (e.g. Date | Description | Amount). Use column headers to determine\n"
-        "which numbers are amounts, balances, quantities, etc.\n"
-        "\n"
-        "1) Statement metadata:\n"
-        "   - provider: The bank or financial institution name (e.g. Wealthsimple, TD, RBC).\n"
-        "   - account_id: The account number or account ID (digits or alphanumeric). Do not use dates as account_id.\n"
-        "   - opening_balance: Numeric balance at the start of the statement period. "
-        "For investment/brokerage accounts (e.g. TFSA, RRSP, Margin), this MUST be the Total Portfolio Value "
-        "or Total Market Value, NOT just the cash portion. (No currency symbol).\n"
-        "   - closing_balance: Numeric balance at the end of the statement period. "
-        "For investment/brokerage accounts, this MUST be the Total Portfolio Value or Total Market Value, "
-        "NOT just the cash portion. (No currency symbol).\n"
-        "   - currency: Currency code, e.g. CAD or USD.\n"
-        "   - start_date: First day of the statement period in YYYY-MM-DD format.\n"
-        "   - end_date: Last day of the statement period in YYYY-MM-DD format.\n"
-        f"   - account_type: You MUST use exactly one of these values: {_allowed_account_types_prompt_suffix()}. "
-        "Do not use any other wording (e.g. use \"TFSA\" not \"Tax-Free Savings\", "
-        "use \"RRSP\" not \"Registered Retirement Savings Plan\").\n"
-        "   - opening_cash_balance / closing_cash_balance: For investment/brokerage ONLY, if the statement shows "
-        "period start/end cash (not total portfolio value), extract those numbers; else null.\n"
-        "\n"
-        "2) Every transaction in the statement as a list. These are transaction line items from a\n"
-        "bank or brokerage statement. Descriptions may be abbreviated, include reference numbers,\n"
-        "ATM/terminal IDs, or payee names. Include transactions from ALL pages and ALL sub-account sections.\n"
-        f"{priority_section}"
-        "   For each transaction provide: date (YYYY-MM-DD), description (text), amount, transaction_type, category, confidence_score (0-1).\n"
-        "   - amount: For Credit Card statements, return the ABSOLUTE VALUE as printed on the statement (always positive). "
-        "For all other account types, use signed amounts (negative = outflow, positive = inflow).\n"
-        "   - transaction_type: Classify each transaction as exactly one of: purchase, fee, interest, cash_advance, payment, credit, refund, deposit, withdrawal, transfer.\n"
-        "     For Credit Card statements: purchases/charges → \"purchase\", finance charges → \"interest\", "
-        "annual/late fees → \"fee\", ATM cash → \"cash_advance\", payments to the card → \"payment\", "
-        "refunds/credit vouchers/cashback applied → \"credit\" or \"refund\".\n"
-        "     For other account types: deposits/income → \"deposit\", withdrawals/debits → \"withdrawal\", "
-        "transfers → \"transfer\", fees → \"fee\".\n"
-        f"   - category: You MUST use exactly one of these values: {_allowed_category_names_prompt_suffix()}, "
-        "or \"Uncategorized\". Use \"Uncategorized\" ONLY when your confidence is less than 0.8; "
-        "otherwise pick the best-matching category and set confidence_score >= 0.8.\n"
-        "   - confidence_score: Your confidence in the category assignment, 0 to 1.\n"
-        "   - running_balance: The running/cumulative account balance shown on the SAME ROW "
-        "as this transaction (e.g. in a \"Balance\" column). Copy the EXACT value printed "
-        "in the statement. Do NOT calculate or derive this value. If no per-row balance "
-        "is shown for this transaction, use null.\n"
-        "   If there are no transactions, return an empty list.\n"
-        "   INVESTMENT/BROKERAGE (TFSA, RRSP, Margin, etc.): In transactions[], include every cash-ledger line that changes cash "
-        "(deposits, withdrawals, transfers, buys, sells, dividends to cash, fees, interest). Signed amounts: negative = cash out, "
-        "positive = cash in. running_balance = per-row cash balance if shown, else null if only portfolio totals appear.\n"
-        "\n"
-        "3) For investment/brokerage accounts (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC), "
-        "extract every holding position as a list. For each holding provide:\n"
-        "   - asset_symbol: Ticker symbol (e.g. XEQT, VFV, BTC). Use \"CASH\" for cash balances.\n"
-        "   - asset_name: Full name of the asset (e.g. \"iShares Core Equity ETF Portfolio\").\n"
-        "   - quantity: Number of units/shares held.\n"
-        "   - unit_price: Price per unit in the account currency.\n"
-        "   - total_value: Total market value (quantity * unit_price).\n"
-        "   - currency: Currency code (e.g. CAD, USD).\n"
-        "   - is_cash_equivalent: true if cash or money-market/savings equivalent, false otherwise.\n"
-        "   Cash balances should be included as a holding with asset_symbol \"CASH\" and is_cash_equivalent true.\n"
-        "   For non-investment accounts (Chequing, Savings, Credit Card, Line of Credit, HELOC, Mortgage, AutoLoan, Student Loan), "
-        "return an empty holdings list.\n"
-        "\n"
-        "Important rules:\n"
-        "- Ignore boilerplate text, terms and conditions, marketing pages, and fee schedules.\n"
-        "- Do not invent transactions. If there are no transactions, return an empty list.\n"
-        "- Prefer the detailed transaction table/ledger over any totals/summary sections.\n"
-        "- Use null for any metadata value you cannot find.\n"
-    )
+    return build_core_extraction_prompt(_PDFPLUMBER_MODALITY, priority_rules=priority)
 
 
 def extract_statement_from_structured_text(
@@ -280,8 +221,6 @@ def parse_statement_pdfplumber(
       1. pdfplumber converts PDF → structured text (tables as markdown)
       2. Gemini Flash-Lite extracts structured JSON from that text
     """
-    from google import genai
-
     if not isinstance(pdf_path, Path):
         pdf_path = Path(pdf_path)
     if not pdf_path.exists():

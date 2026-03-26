@@ -8,7 +8,7 @@ import './DashboardShell.css';
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/dashboard/wealth', icon: PiggyBank, label: 'Wealth' },
-  { to: '/dashboard/cashflow', icon: TrendingUp, label: 'Cashflow' },
+  { to: '/dashboard/spending-income', icon: TrendingUp, label: 'Spending & Income' },
   { to: '/dashboard/data-editor', icon: Database, label: 'Data Editor' },
 ];
 

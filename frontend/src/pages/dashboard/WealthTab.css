@@ -1,88 +1,132 @@
 .wealth-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
+  @apply flex flex-col gap-6;
+}
+
+.wealth-tab-toolbar {
+  @apply flex items-center gap-3 rounded-xl px-4 py-3;
+}
+
+.wealth-tab-toolbar-label {
+  @apply text-sm font-medium text-zinc-400;
+}
+
+.wealth-tab-currency-select {
+  @apply rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 outline-none transition;
+}
+
+.wealth-tab-currency-select:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
+.wealth-tab-metrics-grid {
+  @apply max-w-full;
+}
+
+.wealth-tab-networth-row {
+  @apply w-full;
+}
+
+.wealth-tab-networth-card {
+  @apply flex w-full flex-col items-center gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-6 py-6 text-center;
+}
+
+.wealth-tab-networth-header {
+  @apply flex w-full items-center justify-center;
+}
+
+.wealth-tab-networth-label {
+  @apply text-xs font-semibold uppercase text-zinc-400;
+  letter-spacing: 0.18em;
+}
+
+.wealth-tab-networth-value {
+  @apply font-mono text-3xl font-medium tracking-tight text-zinc-50;
+  font-size: clamp(1.875rem, 3.4vw, 3rem);
+}
+
+.wealth-tab-networth-sub {
+  @apply text-sm text-zinc-400;
+}
+
+.wealth-tab-metric-card {
+  @apply flex flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-5 py-4;
+}
+
+.wealth-tab-metric-header {
+  @apply flex items-center justify-between;
+}
+
+.wealth-tab-metric-label {
+  @apply text-xs font-semibold uppercase text-zinc-400;
+  letter-spacing: 0.14em;
+}
+
+.wealth-tab-metric-icon {
+  @apply shrink-0 text-zinc-500;
+}
+
+.wealth-tab-metric-value {
+  @apply font-mono text-3xl font-medium tracking-tight;
 }
 
 .wealth-tab-loading,
 .wealth-tab-error {
-  padding: 2rem;
-  text-align: center;
-  color: #94a3b8;
+  @apply px-8 py-8 text-center text-sm text-zinc-400;
 }
 
 .wealth-tab-error {
-  color: #f87171;
+  @apply text-rose-400;
 }
 
 .wealth-tab-empty {
-  padding: 1rem 1.25rem;
-  color: #64748b;
-  font-size: 0.9rem;
+  @apply px-5 py-4 text-sm text-zinc-400;
 }
 
 .wealth-tab-section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+  @apply flex flex-col gap-2;
 }
 
 .wealth-tab-group-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  @apply m-0 flex items-center gap-2 text-base font-semibold text-zinc-100;
   margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  color: #e2e8f0;
 }
 
 .wealth-tab-group-icon {
-  width: 1.25rem;
-  height: 1.25rem;
-  color: #94a3b8;
+  @apply h-5 w-5 text-zinc-400;
 }
 
 .wealth-tab-group-desc {
-  margin: 0 0 0.25rem 0;
-  font-size: 0.8rem;
-  color: #64748b;
+  @apply mb-1 mt-0 text-sm text-zinc-400;
 }
 
 .wealth-tab-list {
-  padding: 0;
-  overflow: hidden;
+  @apply overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-0;
 }
 
 .wealth-tab-item {
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  @apply flex flex-col border-b border-zinc-800 p-0;
 }
 
 .wealth-tab-item:last-child {
-  border-bottom: none;
+  @apply border-b-0;
 }
 
 .wealth-tab-item-main {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.25rem;
+  @apply flex w-full items-center justify-between px-5 py-4;
 }
 
 .wealth-tab-item-expandable {
-  cursor: pointer;
+  @apply cursor-pointer;
+}
+
+.wealth-tab-collapse-row {
+  @apply w-full border-0 bg-transparent text-left text-inherit;
 }
 
 .wealth-tab-item-expandable .wealth-tab-expand-icon {
-  flex-shrink: 0;
-  width: 1rem;
-  height: 1rem;
+  @apply mr-1.5 h-4 w-4 shrink-0 text-zinc-400 transition-transform;
   margin-right: 0.35rem;
-  color: #94a3b8;
-  transition: transform 0.2s ease;
 }
 
 .wealth-tab-item-expanded .wealth-tab-expand-icon {
@@ -90,98 +134,107 @@
 }
 
 .wealth-tab-provider {
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  color: #e2e8f0;
+  @apply flex items-center font-medium text-zinc-100;
+}
+
+.wealth-tab-collapse-label {
+  @apply font-semibold;
 }
 
 .wealth-tab-type {
-  color: #fbbf24;
-  font-weight: 600;
+  @apply font-semibold text-amber-500;
 }
 
 .wealth-tab-item-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.15rem;
+  @apply ml-auto flex flex-col items-end gap-0.5 text-right;
 }
 
 .wealth-tab-balance {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  @apply font-mono font-medium;
 }
 
 .wealth-tab-balance-date {
-  font-size: 0.75rem;
-  color: #64748b;
-  font-weight: 400;
+  @apply text-xs font-normal text-zinc-400;
+}
+
+.wealth-tab-insignificant-note {
+  @apply text-xs font-medium text-amber-500;
+}
+
+.wealth-tab-warning {
+  @apply mt-0.5 inline-flex items-center gap-1 text-xs text-amber-500;
+}
+
+.wealth-tab-warning-icon {
+  @apply h-3.5 w-3.5;
 }
 
 .wealth-tab-balance-positive {
-  color: #34d399;
+  @apply text-emerald-400;
 }
 
 .wealth-tab-balance-negative {
-  color: #f87171;
+  @apply text-rose-400;
 }
 
 .wealth-tab-holdings {
-  padding: 0.75rem 1.25rem 1rem 2.5rem;
-  background: rgba(0, 0, 0, 0.2);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  @apply border-t border-zinc-800 bg-zinc-950/60 px-5 pb-4 pt-3 pl-10;
 }
 
 .wealth-tab-holdings-loading,
 .wealth-tab-holdings-error,
 .wealth-tab-holdings-empty {
-  font-size: 0.85rem;
-  color: #64748b;
+  @apply text-sm text-zinc-400;
 }
 
 .wealth-tab-holdings-error {
-  color: #f87171;
+  @apply text-rose-400;
 }
 
 .wealth-tab-holdings-date {
-  font-size: 0.75rem;
-  color: #64748b;
-  margin-bottom: 0.5rem;
+  @apply mb-2 text-xs text-zinc-400;
 }
 
 .wealth-tab-holdings-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  @apply flex flex-col gap-1.5;
 }
 
 .wealth-tab-holding-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-size: 0.9rem;
+  @apply flex items-baseline justify-between text-sm;
 }
 
 .wealth-tab-holding-symbol {
-  color: #e2e8f0;
-  font-weight: 500;
+  @apply font-medium text-zinc-100;
 }
 
 .wealth-tab-holding-detail {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.1rem;
+  @apply flex flex-col items-end gap-0.5;
 }
 
 .wealth-tab-holding-qty {
-  font-size: 0.75rem;
-  color: #64748b;
-  font-weight: 400;
+  @apply font-mono text-xs font-normal text-zinc-400;
 }
 
 .wealth-tab-holding-value {
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  @apply font-mono font-medium;
+}
+
+.wealth-tab-subtype-list {
+  @apply border-t border-zinc-800;
+}
+
+.wealth-tab-subtype-group:last-child .wealth-tab-subtype-row {
+  border-bottom: none;
+}
+
+.wealth-tab-subtype-row .wealth-tab-item-main {
+  @apply pl-8;
+}
+
+.wealth-tab-account-list {
+  @apply bg-zinc-950/40;
+}
+
+.wealth-tab-account-item .wealth-tab-item-main {
+  @apply pl-12;
 }

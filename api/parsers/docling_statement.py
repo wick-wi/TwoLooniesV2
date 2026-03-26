@@ -143,73 +143,30 @@ class StatementExtraction(StatementFields):
 
 
 try:
-    from .account_types_ref import get_valid_account_type_names
-except ImportError:
-    get_valid_account_type_names = None
+    from api.utils.priority_rules import get_prompt_rules_text
+except ImportError:  # pragma: no cover
+    try:
+        from ..utils.priority_rules import get_prompt_rules_text  # type: ignore
+    except ImportError:  # pragma: no cover
+        get_prompt_rules_text = None  # type: ignore
 
 try:
-    from api.utils.categorization import get_category_names
+    from .prompts import build_core_extraction_prompt
 except ImportError:
-    try:
-        from ..utils.categorization import get_category_names
-    except ImportError:
-        get_category_names = None
-
-
-def _allowed_account_types_prompt_suffix() -> str:
-    """Allowed account_type values for LLM prompt (from account_types.json)."""
-    if get_valid_account_type_names is None:
-        return "AutoLoan, Chequing, Credit Card, Crypto, DPSP, ESOP, FHSA, GIC, HELOC, Line of Credit, LIRA, Margin, Mortgage, RDSP, RESP, RPP, RRIF, RRSP, Savings, Student Loan, TFSA"
-    return ", ".join(sorted(get_valid_account_type_names()))
-
-
-def _allowed_category_names_prompt_suffix() -> str:
-    """Allowed category names for LLM prompt (from categories.json). Does not include 'Uncategorized' (allowed separately in prompt)."""
-    if get_category_names is None:
-        return "Bank & broker fees, Career & Education, Credit Card Payment, Dining & Coffee, E-Transfer, Entertainment & Subs, Gifts and Donations, Groceries, Health & Wellness, Housing, Household & Shopping, Income, Loans & Reimbursements, Miscellaneous, Securities Trading, Self-Transfer, Transport & Auto, Travel, Utilities & Phone"
-    return ", ".join(get_category_names())
+    from api.parsers.prompts import build_core_extraction_prompt  # type: ignore
 
 
 def _build_extraction_prompt() -> str:
-    return f"""You are extracting structured data from a bank/financial statement that has been converted to markdown.
-
-Extract the following:
-
-1) Statement metadata:
-   - provider: The bank or financial institution name (e.g. Wealthsimple, TD, RBC).
-   - account_id: The account number or account ID (digits or alphanumeric). Do not use dates (e.g. 20250402) as account_id.
-   - opening_balance: Numeric balance at the start of the statement period. For investment/brokerage accounts (e.g., TFSA, RRSP, Margin), this MUST be the Total Portfolio Value or Total Market Value, NOT just the cash portion. (No currency symbol).
-   - closing_balance: Numeric balance at the end of the statement period. For investment/brokerage accounts, this MUST be the Total Portfolio Value or Total Market Value, NOT just the cash portion. (No currency symbol).
-   - currency: Currency code, e.g. CAD or USD.
-   - start_date: First day of the statement period in YYYY-MM-DD format.
-   - end_date: Last day of the statement period in YYYY-MM-DD format.
-   - account_type: You MUST use exactly one of these values (pick the closest match to what the document says): {_allowed_account_types_prompt_suffix()}. Do not use any other wording (e.g. use "TFSA" not "Tax-Free Savings", use "RRSP" not "Registered Retirement Savings Plan").
-   - opening_cash_balance / closing_cash_balance: For investment/brokerage accounts ONLY, if the statement shows period start/end cash (cash balance, not total portfolio value), extract those numeric values. Must match opening_balance/closing_balance currency. Use null if not stated or unclear.
-
-2) Every transaction in the statement as a list. These are transaction line items from a bank or brokerage statement (not from a live feed with clean merchant names). Descriptions may be abbreviated, include reference numbers, ATM/terminal IDs, or payee names, and format varies by institution—use this context when assigning categories.
-   For each transaction provide: date (YYYY-MM-DD), description (text), amount, transaction_type, category, confidence_score (0-1).
-   - amount: For Credit Card statements, return the ABSOLUTE VALUE as printed on the statement (always positive). For all other account types, use signed amounts (negative = outflow, positive = inflow).
-   - transaction_type: Classify each transaction as exactly one of: purchase, fee, interest, cash_advance, payment, credit, refund, deposit, withdrawal, transfer.
-     For Credit Card statements: purchases/charges → "purchase", finance charges → "interest", annual/late fees → "fee", ATM cash → "cash_advance", payments to the card → "payment", refunds/credit vouchers/cashback applied → "credit" or "refund".
-     For other account types: deposits/income → "deposit", withdrawals/debits → "withdrawal", transfers → "transfer", fees → "fee".
-   - category: You MUST use exactly one of these values: {_allowed_category_names_prompt_suffix()}, or "Uncategorized". Use "Uncategorized" ONLY when your confidence in the category assignment is less than 0.8; otherwise pick the best-matching category from the list and set confidence_score at least 0.8.
-   - confidence_score: Your confidence in the category assignment, a number from 0 to 1.
-   - running_balance: The running/cumulative account balance shown on the SAME ROW as this transaction (e.g. in a "Balance" column). Copy the EXACT value printed in the statement. Do NOT calculate or derive this value. If no per-row balance is shown for this transaction, use null.
-   If there are no transactions, return an empty list.
-   INVESTMENT/BROKERAGE ACCOUNTS (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC): In transactions[], include every line from the cash/activity ledger that changes cash balance (deposits, withdrawals, bank transfers, buys, sells, dividends paid to cash, fees, interest, etc.). Use signed amounts (negative = cash out, positive = cash in). Classify transaction_type appropriately (e.g. purchase for buys, deposit/withdrawal/transfer for bank movements). If the statement shows a per-row cash balance, put it in running_balance; if only portfolio value is shown per row, use null for running_balance. Holdings in section (3) still capture positions.
-
-3) For investment/brokerage accounts (TFSA, RRSP, RRIF, LIRA, FHSA, RESP, RDSP, RPP, DPSP, Margin, ESOP, Crypto, GIC), extract every holding position as a list. For each holding provide:
-   - asset_symbol: Ticker symbol (e.g. XEQT, VFV, BTC). Use "CASH" for cash balances.
-   - asset_name: Full name of the asset (e.g. "iShares Core Equity ETF Portfolio").
-   - quantity: Number of units/shares held.
-   - unit_price: Price per unit in the account currency.
-   - total_value: Total market value of this position (quantity * unit_price).
-   - currency: Currency code (e.g. CAD, USD).
-   - is_cash_equivalent: true if this position is cash or a money-market/savings equivalent, false otherwise.
-   Cash balances within an investment account should be included as a holding with asset_symbol "CASH" and is_cash_equivalent true.
-   For non-investment accounts (Chequing, Savings, Credit Card, Line of Credit, HELOC, Mortgage, AutoLoan, Student Loan), return an empty holdings list.
-
-Use null for any metadata value you cannot find."""
+    priority = ""
+    if get_prompt_rules_text:
+        try:
+            priority = (get_prompt_rules_text() or "").strip()
+        except Exception:
+            priority = ""
+    return build_core_extraction_prompt(
+        "The document has been converted to markdown.",
+        priority_rules=priority,
+    )
 
 
 def _is_gemini_dump_enabled() -> bool:

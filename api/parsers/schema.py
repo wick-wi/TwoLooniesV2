@@ -6,6 +6,8 @@ run independently—no parser imports another parser. Import from here for
 StatementExtraction and allowed account type/category prompt suffixes.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 try:
@@ -23,6 +25,46 @@ except ImportError:
 
 
 # --- Pydantic models (canonical schema for all parsers) ---
+
+
+class AmountMapping(BaseModel):
+    """How a CSV encodes transaction amount values."""
+
+    mode: Literal["signed", "split"] = Field(description="Amount mode: signed single column or split inflow/outflow columns")
+    column: str | None = Field(default=None, description="Column for signed amounts when mode='signed'")
+    inflow_col: str | None = Field(default=None, description="Column for incoming amounts when mode='split'")
+    outflow_col: str | None = Field(default=None, description="Column for outgoing amounts when mode='split'")
+
+
+class CSVColumnMapping(BaseModel):
+    """LLM-generated mapping from CSV headers to extraction fields."""
+
+    provider: str = Field(description="Guessed bank or financial institution name")
+    account_type: Literal["depository", "credit", "investment", "loan"] = Field(
+        description="Guessed top-level account type"
+    )
+    account_subtype: str | None = Field(
+        default=None,
+        description="Optional canonical subtype guess (e.g. Chequing, Savings, Credit Card, TFSA, Line of Credit)",
+    )
+    date_col: str = Field(description="Exact CSV column name containing transaction date")
+    date_format: str = Field(description="Python strptime format for date_col values (e.g. '%Y-%m-%d')")
+    description_col: str = Field(description="Exact CSV column name containing transaction description/memo")
+    amount_logic: AmountMapping = Field(description="How to compute signed amount from one or two CSV columns")
+    balance_col: str | None = Field(default=None, description="Optional running balance column if present")
+    account_subtype_col: str | None = Field(
+        default=None,
+        description="Optional CSV column containing per-row account subtype values (e.g. Chequing, TFSA, Credit Card)",
+    )
+    currency: str = Field(default="CAD", description="Guessed currency code")
+    account_id_col: str | None = Field(
+        default=None,
+        description="Optional CSV column for per-row account id/number; use when no standard account_id/account number header exists. Must exactly match a header.",
+    )
+    currency_col: str | None = Field(
+        default=None,
+        description="Optional CSV column for per-row ISO currency; use when headers are not standard. Must exactly match a header.",
+    )
 
 
 class StatementFields(BaseModel):
@@ -70,6 +112,10 @@ class TransactionItem(BaseModel):
         default=None,
         description="Running/cumulative account balance shown on the same row as this transaction. "
         "Copy the EXACT value printed; do NOT calculate it. Use null if not shown.",
+    )
+    currency: str = Field(
+        default="CAD",
+        description="ISO 4217 currency for this transaction (e.g. CAD, USD)",
     )
 
 

@@ -1,0 +1,388 @@
+/* ── SpendingIncomeTab ── */
+.si-tab {
+  @apply flex flex-col gap-7 pb-8;
+}
+
+/* ── Loading / Error / Empty states ── */
+.si-tab-loading,
+.si-tab-error,
+.si-tab-empty {
+  @apply flex min-h-80 flex-col items-center justify-center gap-2 text-sm text-zinc-400;
+}
+
+.si-tab-error {
+  @apply text-rose-400;
+}
+
+.si-tab-empty-hint {
+  @apply max-w-md text-center text-sm text-zinc-400;
+}
+
+/* ── Section title ── */
+.si-section-title {
+  @apply mb-3 mt-0 text-xs font-semibold uppercase text-zinc-400;
+  letter-spacing: 0.18em;
+}
+
+/* ── Date filter bar ── */
+.si-filter-card {
+  @apply flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-4;
+}
+
+.si-filter-row {
+  @apply flex items-center gap-2.5;
+  flex-wrap: wrap;
+}
+
+.si-filter-label {
+  @apply text-sm font-medium text-zinc-400;
+  white-space: nowrap;
+}
+
+.si-preset-btn {
+  @apply cursor-pointer rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs font-medium text-zinc-400 transition;
+  white-space: nowrap;
+}
+
+.si-preset-btn:hover {
+  @apply border-zinc-700 bg-zinc-900 text-zinc-100;
+}
+
+.si-preset-btn-active {
+  @apply border-amber-500 bg-amber-500/10 text-amber-500;
+}
+
+.si-custom-range {
+  @apply flex items-center gap-2;
+  flex-wrap: wrap;
+}
+
+.si-date-input {
+  @apply rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 outline-none transition;
+  colorscheme: dark;
+}
+
+.si-date-input:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
+.si-date-sep {
+  @apply text-sm text-zinc-500;
+}
+
+.si-ccy-row {
+  @apply flex items-center gap-2.5;
+  flex-wrap: wrap;
+}
+
+.si-ccy-select {
+  @apply rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 outline-none transition;
+}
+
+.si-ccy-select:focus {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
+.si-ccy-asof {
+  @apply text-xs text-zinc-400;
+}
+
+/* ── Section A: KPI cards ── */
+.si-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 640px) {
+  .si-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.si-kpi-card {
+  @apply flex flex-col gap-2 rounded-2xl border border-zinc-800 bg-zinc-900 px-6 py-5;
+}
+
+.si-kpi-label {
+  @apply flex items-center gap-1.5 text-xs font-semibold uppercase text-zinc-400;
+  letter-spacing: 0.18em;
+}
+
+.si-kpi-value {
+  @apply font-mono text-3xl font-medium tracking-tight;
+}
+
+.si-kpi-income {
+  @apply text-emerald-400;
+}
+
+.si-kpi-spending {
+  @apply text-rose-400;
+}
+
+.si-kpi-savings-positive {
+  @apply text-emerald-400;
+}
+
+.si-kpi-savings-negative {
+  @apply text-rose-400;
+}
+
+.si-kpi-savings-zero {
+  @apply text-zinc-400;
+}
+
+/* ── Section B: Bar chart ── */
+.si-chart-card {
+  @apply rounded-2xl border border-zinc-800 bg-zinc-900 px-6 pb-2 pt-5;
+  min-height: 280px;
+  height: 320px;
+}
+
+.si-chart-inner {
+  @apply h-full w-full;
+}
+
+/* ── Section C: Donut chart ── */
+.si-donut-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 768px) {
+  .si-donut-section {
+    grid-template-columns: 1fr;
+  }
+}
+
+.si-donut-card {
+  @apply rounded-2xl border border-zinc-800 bg-zinc-900 px-6 pb-2 pt-5;
+  height: 320px;
+}
+
+.si-donut-legend-card {
+  @apply flex flex-col gap-0 overflow-y-auto rounded-2xl border border-zinc-800 bg-zinc-900 px-6 py-5;
+  height: 320px;
+}
+
+.si-donut-legend-item {
+  @apply flex items-center justify-between gap-2 border-b border-zinc-800 py-2;
+}
+
+.si-donut-legend-item:last-child {
+  border-bottom: none;
+}
+
+.si-donut-legend-label {
+  @apply flex items-center gap-2 text-sm text-zinc-200;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.si-donut-legend-swatch {
+  @apply h-2.5 w-2.5 shrink-0 rounded-full;
+}
+
+.si-donut-legend-pct {
+  @apply font-mono text-xs font-medium text-zinc-400;
+  white-space: nowrap;
+}
+
+.si-donut-legend-amount {
+  @apply font-mono text-sm font-medium text-zinc-100;
+  white-space: nowrap;
+}
+
+/* ── Section D: Ledger table ── */
+.si-table-header {
+  @apply mb-3 flex items-baseline gap-2;
+}
+
+.si-table-title {
+  @apply m-0 text-lg font-semibold text-zinc-100;
+}
+
+.si-table-count {
+  @apply font-mono text-sm text-zinc-400;
+}
+
+.si-ledger-card {
+  @apply overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 p-0;
+}
+
+.si-table-scroll {
+  @apply w-full overflow-x-auto;
+}
+
+.si-table {
+  @apply w-full;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  table-layout: auto;
+}
+
+.si-table > thead > tr:first-child > th:nth-child(1),
+.si-table > tbody > tr > td:nth-child(1) {
+  width: 1%;
+  min-width: 8.5rem;
+  white-space: nowrap;
+}
+
+.si-table > thead > tr:first-child > th:nth-child(2),
+.si-table > tbody > tr > td:nth-child(2) {
+  width: auto;
+}
+
+.si-table > thead > tr:first-child > th:nth-child(3),
+.si-table > tbody > tr > td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.si-table > thead > tr:first-child > th:nth-child(4),
+.si-table > tbody > tr > td:nth-child(4) {
+  width: 1%;
+  min-width: 7.5rem;
+  white-space: nowrap;
+}
+
+.si-table th {
+  @apply border-b border-zinc-800 bg-zinc-950/80 px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-400;
+  white-space: nowrap;
+  letter-spacing: 0.14em;
+}
+
+.si-table td {
+  @apply border-b border-zinc-800 px-4 py-3 text-zinc-100;
+  vertical-align: top;
+}
+
+.si-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.si-table tbody tr:hover td {
+  @apply bg-zinc-950/50;
+}
+
+.si-table-date {
+  @apply text-sm text-zinc-400;
+  white-space: nowrap;
+  width: 10rem;
+}
+
+.si-table-desc {
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+.si-table-category {
+  white-space: nowrap;
+}
+
+.si-cat-badge {
+  @apply inline-block rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-1 text-xs font-medium text-zinc-400;
+}
+
+.si-table-amount {
+  @apply text-right font-mono font-medium;
+  white-space: nowrap;
+}
+
+.si-table-amount-head {
+  @apply text-right;
+}
+
+.si-amount-income {
+  @apply text-emerald-400;
+}
+
+.si-amount-refund {
+  @apply text-amber-500;
+}
+
+.si-amount-spending {
+  @apply text-rose-400;
+}
+
+.si-table-empty {
+  @apply m-0 px-6 py-5 text-sm text-zinc-400;
+}
+
+.si-empty-copy {
+  @apply text-sm text-zinc-400;
+}
+
+/* ── Pagination ── */
+.si-pagination {
+  @apply flex items-center justify-between gap-2 pt-4;
+  flex-wrap: wrap;
+}
+
+.si-pagination-info {
+  @apply text-sm text-zinc-400;
+}
+
+.si-pagination-btns {
+  @apply flex gap-2;
+}
+
+.si-page-btn {
+  @apply cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-400 transition;
+}
+
+.si-page-btn:hover:not(:disabled) {
+  @apply border-zinc-700 bg-zinc-900 text-zinc-100;
+}
+
+.si-page-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Nivo chart tooltips override ── */
+.si-bar-tooltip {
+  @apply rounded-xl border border-zinc-800 bg-zinc-900 px-3.5 py-3 text-sm text-zinc-50 shadow-2xl;
+  pointer-events: none;
+}
+
+.si-bar-tooltip-title {
+  @apply mb-1.5 font-semibold text-zinc-100;
+}
+
+.si-bar-tooltip-row {
+  @apply flex items-center gap-2 text-zinc-300;
+}
+
+.si-bar-tooltip-dot {
+  @apply h-2.5 w-2.5 shrink-0 rounded-full;
+}
+
+.si-tooltip-value {
+  @apply font-mono text-zinc-50;
+}
+
+.si-bar-tooltip-net {
+  @apply mt-1 border-t border-zinc-800 pt-1 font-semibold;
+}
+
+.si-net-positive {
+  @apply text-emerald-400;
+}
+
+.si-net-negative {
+  @apply text-rose-400;
+}
+
+.si-net-zero {
+  @apply text-zinc-400;
+}

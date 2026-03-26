@@ -28,6 +28,14 @@ def _infer_category(description: str) -> str:
     return "Other"
 
 
+def _normalize_category_name(category: Any) -> str:
+    """Normalize category strings for backward compatibility."""
+    cat = (category or "").strip()
+    if cat == "Reimbursements & Loans":
+        return "Loans & Reimbursements"
+    return cat
+
+
 # Categories excluded from headline income/expense unless the row is an orphan leg of a linked pair
 # (partner id not in the same transaction list).
 EXCLUDE_FROM_CASHFLOW_CATEGORIES = frozenset(
@@ -35,7 +43,6 @@ EXCLUDE_FROM_CASHFLOW_CATEGORIES = frozenset(
         "Self-Transfer",
         "Credit Card Payment",
         "Loans & Reimbursements",
-        "Reimbursements & Loans",
     }
 )
 
@@ -45,7 +52,7 @@ def _skip_for_cashflow_aggregate(t: dict[str, Any], id_set: set[str]) -> bool:
     lid = t.get("linked_transaction_id")
     if lid and str(lid) in id_set:
         return True
-    cat = (t.get("category") or "").strip()
+    cat = _normalize_category_name(t.get("category"))
     if cat not in EXCLUDE_FROM_CASHFLOW_CATEGORIES:
         return False
     if lid and str(lid) not in id_set:
@@ -101,7 +108,7 @@ def analyze_transactions(transactions: list[dict[str, Any]]) -> dict[str, Any]:
         except (TypeError, ValueError):
             amount = 0.0
         desc = (t.get("description") or t.get("name") or "Unknown").strip()
-        cat = t.get("category") or _infer_category(desc)
+        cat = _normalize_category_name(t.get("category")) or _infer_category(desc)
         date_str = t.get("date")
 
         if _skip_for_cashflow_aggregate(t, id_set):

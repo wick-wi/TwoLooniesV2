@@ -35,7 +35,7 @@ from api.parsers.gemini_native_parser import parse_statement_pdf_native
 from api.parsers.pdfplumber_parser import parse_statement_pdfplumber
 
 # ---------------------------------------------------------------------------
-# Test-case registry: maps PDF filename -> expected-JSON filename
+# Optional test-case registry: maps PDF filename -> expected-JSON filename
 # ---------------------------------------------------------------------------
 TEST_CASES: list[dict] = [
     {
@@ -63,6 +63,10 @@ PARSER_DUMP_SUBFOLDER = {
     "Docling+LLM": "docling_llm",
     "pdfplumber+LLM": "pdfplumber_llm",
 }
+
+# Expected baseline lookup by PDF filename for optional accuracy scoring.
+EXPECTED_BY_PDF = {tc["pdf"]: tc["expected"] for tc in TEST_CASES}
+LABEL_BY_PDF = {tc["pdf"]: tc["label"] for tc in TEST_CASES}
 
 
 def dump_result(parser_name: str, pdf_name: str, result: dict) -> Path:
@@ -308,43 +312,53 @@ def main():
 
     summary_rows: list[dict] = []
 
-    for tc in TEST_CASES:
-        pdf_path = TEST_DATA_DIR / tc["pdf"]
-        expected_path = JSON_DUMPS_DIR / tc["expected"]
+    pdf_paths = sorted(TEST_DATA_DIR.glob("*.pdf"))
+    if not pdf_paths:
+        print(f"\n⚠ No PDFs found in {TEST_DATA_DIR}")
+        print()
+        return
 
-        if not pdf_path.exists():
-            print(f"\n⚠ SKIP: PDF not found – {pdf_path}")
-            continue
-        if not expected_path.exists():
-            print(f"\n⚠ SKIP: Expected JSON not found – {expected_path}")
-            continue
+    for pdf_path in pdf_paths:
+        pdf_name = pdf_path.name
+        label = LABEL_BY_PDF.get(pdf_name, f"{pdf_path.stem} (Auto-discovered)")
+        expected_name = EXPECTED_BY_PDF.get(pdf_name)
+        expected = None
 
-        expected = json.loads(expected_path.read_text())
-        print_section(tc["label"])
-        print(f"  PDF:      {tc['pdf']}")
-        print(f"  Expected: {tc['expected']}")
+        if expected_name:
+            expected_path = JSON_DUMPS_DIR / expected_name
+            if expected_path.exists():
+                expected = json.loads(expected_path.read_text())
+            else:
+                print(f"\n⚠ Expected JSON not found for {pdf_name}: {expected_path}")
+
+        print_section(label)
+        print(f"  PDF:      {pdf_name}")
+        print(f"  Expected: {expected_name if expected_name else '(none)'}")
 
         for parser_name, runner in parsers_to_run:
             print(f"\n  ▶ Running {parser_name} …")
             try:
                 result, elapsed = runner(pdf_path)
-                dump_path = dump_result(parser_name, tc["pdf"], result)
-                acc = compute_accuracy(result, expected)
+                dump_path = dump_result(parser_name, pdf_name, result)
                 print(f"    Latency: {elapsed:.2f}s")
                 print(f"    Saved:   {dump_path.relative_to(REPO_ROOT)}")
-                print_accuracy(parser_name, acc)
-                summary_rows.append({
-                    "test": tc["label"],
-                    "parser": parser_name,
-                    "latency": elapsed,
-                    "meta_%": acc["metadata_score"],
-                    "txn_f1_%": acc["transaction_f1"],
-                    "overall": acc["overall"],
-                })
+                if expected is not None:
+                    acc = compute_accuracy(result, expected)
+                    print_accuracy(parser_name, acc)
+                    summary_rows.append({
+                        "test": label,
+                        "parser": parser_name,
+                        "latency": elapsed,
+                        "meta_%": acc["metadata_score"],
+                        "txn_f1_%": acc["transaction_f1"],
+                        "overall": acc["overall"],
+                    })
+                else:
+                    print("    Accuracy: skipped (no expected baseline configured)")
             except Exception as e:
                 print(f"    ✗ FAILED: {e}")
                 summary_rows.append({
-                    "test": tc["label"],
+                    "test": label,
                     "parser": parser_name,
                     "latency": None,
                     "meta_%": None,

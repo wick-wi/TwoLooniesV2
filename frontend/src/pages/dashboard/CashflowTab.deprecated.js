@@ -7,7 +7,7 @@ import CashflowSankey from '../../components/CashflowSankey';
 import { formatMoney } from '../../utils/money';
 import { convertViaCad, sortedCurrencyCodes } from '../../utils/fx';
 import { aggregateCashPeriodBounds, partitionCashEstimateAccounts } from '../../utils/cashflowLedger';
-import './CashflowTab.css';
+import './CashflowTab.deprecated.css';
 
 const API_BASE = process.env.REACT_APP_API_URL ?? '';
 

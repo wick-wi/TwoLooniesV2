@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAnalysis } from '../context/AnalysisContext';
 import { useUpload } from '../context/UploadContext';
 import UploadStatementModal from '../components/UploadStatementModal';
+import CsvReviewModal from '../components/CsvReviewModal';
 import { formatApiConnectionError, formatStatementUploadError } from '../utils/statementUploadErrors';
 import { FileText, Trash2, RefreshCw, Plus, Landmark, Scale } from 'lucide-react';
 import './Dashboard.css';
@@ -47,6 +48,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [csvReviewFiles, setCsvReviewFiles] = useState(null);
+  const [savingCsvReview, setSavingCsvReview] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [rerunning, setRerunning] = useState(false);
   const [linkToken, setLinkToken] = useState(null);
@@ -227,6 +230,12 @@ export default function Dashboard() {
       setShowUploadModal(false);
       return;
     }
+    const hasCsvGroups = data.files.some((f) => Array.isArray(f.account_groups) && f.account_groups.length > 0);
+    if (hasCsvGroups) {
+      setCsvReviewFiles(data.files);
+      setShowUploadModal(false);
+      return;
+    }
     try {
       await axios.post(
         `${API_BASE}/api/save_statements`,
@@ -239,6 +248,25 @@ export default function Dashboard() {
       setError(err.response?.data?.detail || err.message || 'Failed to save statements');
       setAnalysisData(data);
       setShowUploadModal(false);
+    }
+  };
+
+  const handleCsvReviewConfirm = async (confirmedFiles) => {
+    if (!token) return;
+    setSavingCsvReview(true);
+    setError(null);
+    try {
+      await axios.post(
+        `${API_BASE}/api/save_statements`,
+        { statements: confirmedFiles },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setCsvReviewFiles(null);
+      fetchUserData();
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to save reviewed CSV statements');
+    } finally {
+      setSavingCsvReview(false);
     }
   };
 
@@ -479,6 +507,14 @@ export default function Dashboard() {
               onError: (err) => setError(uploadErrorMessage(err)),
             })
           }
+        />
+      )}
+      {csvReviewFiles && (
+        <CsvReviewModal
+          files={csvReviewFiles}
+          saving={savingCsvReview}
+          onCancel={() => setCsvReviewFiles(null)}
+          onConfirm={handleCsvReviewConfirm}
         />
       )}
     </div>
