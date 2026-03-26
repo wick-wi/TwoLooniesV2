@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import './UploadContext.css';
 
 const UploadContext = createContext(null);
@@ -27,10 +27,10 @@ export function UploadProvider({ children }) {
   const callbacksRef = useRef({ onSuccess: null, onError: null });
   const skippedDuplicatesRef = useRef([]);
 
-  const clearJobSession = () => {
+  const clearJobSession = useCallback(() => {
     sessionStorage.removeItem(JOB_ID_KEY);
     sessionStorage.removeItem(JOB_SECRET_KEY);
-  };
+  }, []);
 
   const startUpload = async (uploadPromise, { onSuccess, onError } = {}) => {
     clearJobSession();
@@ -67,7 +67,7 @@ export function UploadProvider({ children }) {
     }
   };
 
-  const handleError = (err, fallbackMessage) => {
+  const handleError = useCallback((err, fallbackMessage) => {
     console.error('Upload Error:', err);
     callbacksRef.current.onError?.(err);
     setUploadState((prev) => ({
@@ -82,7 +82,7 @@ export function UploadProvider({ children }) {
       clearJobSession();
       setUploadState((prev) => ({ ...prev, active: false }));
     }, 4000);
-  };
+  }, [clearJobSession]);
 
   useEffect(() => {
     if (!jobId) {
@@ -158,7 +158,7 @@ export function UploadProvider({ children }) {
     checkStatus();
 
     return () => clearInterval(pollInterval);
-  }, [jobId]);
+  }, [jobId, handleError, clearJobSession]);
 
   const value = {
     uploadInProgress: uploadState.active,

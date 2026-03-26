@@ -9,7 +9,7 @@ import UploadStatementModal from '../../components/UploadStatementModal';
 import CsvReviewModal from '../../components/CsvReviewModal';
 import { formatApiConnectionError, formatStatementUploadError } from '../../utils/statementUploadErrors';
 import DataEditorTable from '../../components/DataEditorTable';
-import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, X, ChevronDown, CheckSquare, Scale, ClipboardCheck } from 'lucide-react';
+import { FileText, Trash2, RefreshCw, Plus, Landmark, Upload, Sparkles, ChevronDown, CheckSquare, Scale, ClipboardCheck } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { formatMoney } from '../../utils/money';
 import './DataEditorTab.css';
