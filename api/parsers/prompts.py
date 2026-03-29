@@ -6,6 +6,12 @@ was pre-processed; the shared business logic (metadata fields, transaction rules
 holdings rules) lives here so it only needs to be maintained in one place.
 """
 
+# When True, build_core_extraction_prompt() should load the active row from
+# public.prompt_versions for key "core_extraction" instead of the hardcoded template below.
+# Admin CRUD on prompt_versions is always live; until this is True, statement extraction
+# ignores the DB and uses only this module's string. Flip to True after wiring the fetch.
+PROMPT_VERSIONS_WIRED_TO_EXTRACTION = False
+
 from .schema import (
     get_allowed_account_types_prompt_suffix,
     get_allowed_category_names_prompt_suffix,

@@ -63,18 +63,30 @@ export function UploadProvider({ children }) {
         setUploadState({ active: false, isError: false });
       }
     } catch (err) {
-      handleError(err, 'Failed to start upload.');
+      try {
+        handleError(err, 'Failed to start upload.');
+      } catch (handleErr) {
+        console.error('Upload handleError failed:', handleErr);
+      }
     }
   };
 
   const handleError = useCallback((err, fallbackMessage) => {
     console.error('Upload Error:', err);
-    callbacksRef.current.onError?.(err);
+    try {
+      callbacksRef.current.onError?.(err);
+    } catch (cbErr) {
+      console.error('Upload onError callback failed:', cbErr);
+    }
+    const msg =
+      err && typeof err.message === 'string' && err.message
+        ? err.message
+        : fallbackMessage;
     setUploadState((prev) => ({
       ...prev,
       active: true,
       isError: true,
-      message: err.message || fallbackMessage,
+      message: msg,
     }));
 
     setTimeout(() => {
@@ -92,6 +104,7 @@ export function UploadProvider({ children }) {
 
     sessionStorage.setItem(JOB_ID_KEY, jobId);
     let pollInterval;
+    const abortController = new AbortController();
 
     const pollHeaders = () => {
       const secret = sessionStorage.getItem(JOB_SECRET_KEY);
@@ -106,6 +119,7 @@ export function UploadProvider({ children }) {
       try {
         const statusRes = await fetch(apiUrl(`/api/upload_statement_status/${jobId}`), {
           headers: pollHeaders(),
+          signal: abortController.signal,
         });
         if (!statusRes.ok) throw new Error('Upload session expired or lost.');
 
@@ -124,6 +138,7 @@ export function UploadProvider({ children }) {
 
           const resultRes = await fetch(apiUrl(`/api/upload_statement_result/${jobId}`), {
             headers: pollHeaders(),
+            signal: abortController.signal,
           });
           if (!resultRes.ok) throw new Error('Failed to fetch final results.');
 
@@ -135,7 +150,11 @@ export function UploadProvider({ children }) {
               : {}),
           };
           skippedDuplicatesRef.current = [];
-          callbacksRef.current.onSuccess?.(merged);
+          try {
+            callbacksRef.current.onSuccess?.(merged);
+          } catch (cbErr) {
+            console.error('Upload onSuccess callback failed:', cbErr);
+          }
 
           setUploadState((prev) => ({ ...prev, message: data.message || 'All done!', isError: false }));
           setTimeout(() => {
@@ -149,15 +168,23 @@ export function UploadProvider({ children }) {
           throw new Error(data.message || 'Processing failed on the server.');
         }
       } catch (err) {
+        if (err?.name === 'AbortError') return;
         clearInterval(pollInterval);
-        handleError(err, 'Lost connection to processing server.');
+        try {
+          handleError(err, 'Lost connection to processing server.');
+        } catch (handleErr) {
+          console.error('Upload handleError failed:', handleErr);
+        }
       }
     };
 
     pollInterval = setInterval(checkStatus, 750);
     checkStatus();
 
-    return () => clearInterval(pollInterval);
+    return () => {
+      abortController.abort();
+      clearInterval(pollInterval);
+    };
   }, [jobId, handleError, clearJobSession]);
 
   const value = {

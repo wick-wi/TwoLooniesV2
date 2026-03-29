@@ -6,4 +6,8 @@ git .add
 git -m commit with an appropriate comment
 git push
 
-let me know if there is any errors when trying to git push
+check that supabase is linked to the production environment twoloonies.
+supabase projects list  
+to make sure its linked to project "ifaqmmkqjjetkvtqiuot"
+
+let me know if there is any errors or steps that you are not sure.

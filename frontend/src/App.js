@@ -10,11 +10,22 @@ import PrivacyPage from './pages/legal/PrivacyPage';
 import TermsPage from './pages/legal/TermsPage';
 import SubprocessorsPage from './pages/legal/SubprocessorsPage';
 import DashboardShell from './components/DashboardShell';
+import AdminShell from './components/AdminShell';
 import DashboardTab from './pages/dashboard/DashboardTab';
 import WealthTab from './pages/dashboard/WealthTab';
 import SpendingIncomeTab from './pages/dashboard/SpendingIncomeTab';
 import DataEditorTab from './pages/dashboard/DataEditorTab';
 import ProfileTab from './pages/dashboard/ProfileTab';
+import AdminDashboard from './pages/admin/AdminDashboard';
+import ConfigPage from './pages/admin/ConfigPage';
+import PromptsPage from './pages/admin/PromptsPage';
+import UsersPage from './pages/admin/UsersPage';
+import ApiKeysPage from './pages/admin/ApiKeysPage';
+import AuditLogPage from './pages/admin/AuditLogPage';
+import AnalyticsDashboard from './pages/admin/AnalyticsDashboard';
+import ExtractionAnalytics from './pages/admin/ExtractionAnalytics';
+import UserAnalytics from './pages/admin/UserAnalytics';
+import QueueHealth from './pages/admin/QueueHealth';
 function LandingRoute() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
@@ -47,6 +58,24 @@ function ProtectedDashboard() {
   return <DashboardShell />;
 }
 
+function ProtectedAdmin() {
+  const { isAuthenticated, isAdmin, loading, adminReady } = useAuth();
+  if (loading || (isAuthenticated && !adminReady)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-950 text-zinc-50">
+        Loading...
+      </div>
+    );
+  }
+  if (!isAuthenticated) {
+    return <Navigate to="/" state={{ showLogin: true }} replace />;
+  }
+  if (!isAdmin) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return <AdminShell />;
+}
+
 function App() {
   return (
     <AuthProvider>
@@ -67,6 +96,18 @@ function App() {
               <Route path="cashflow" element={<Navigate to="/dashboard/spending-income" replace />} />
               <Route path="data-editor" element={<DataEditorTab />} />
               <Route path="profile" element={<ProfileTab />} />
+            </Route>
+            <Route path="/admin" element={<ProtectedAdmin />}>
+              <Route index element={<AdminDashboard />} />
+              <Route path="config" element={<ConfigPage />} />
+              <Route path="prompts" element={<PromptsPage />} />
+              <Route path="users" element={<UsersPage />} />
+              <Route path="api-keys" element={<ApiKeysPage />} />
+              <Route path="audit-log" element={<AuditLogPage />} />
+              <Route path="analytics" element={<AnalyticsDashboard />} />
+              <Route path="analytics/extraction" element={<ExtractionAnalytics />} />
+              <Route path="analytics/users" element={<UserAnalytics />} />
+              <Route path="queue" element={<QueueHealth />} />
             </Route>
           </Routes>
         </BrowserRouter>

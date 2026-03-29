@@ -17,7 +17,7 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 # Supported parser names (must match the dispatch below)
-PARSER_NAMES = ("docling", "gemini_native", "pdfplumber")
+PARSER_NAMES = ("docling", "gemini_native", "pdfplumber", "pdfplumber_v2")
 DEFAULT_PARSER = "pdfplumber"
 
 
@@ -69,4 +69,7 @@ def parse_statement_pdf(
     if name == "pdfplumber":
         from .pdfplumber_parser import parse_statement_pdfplumber
         return parse_statement_pdfplumber(pdf_path, api_key=api_key, **kwargs)
+    if name == "pdfplumber_v2":
+        from .pdfplumberV2_parser import parse_statement_pdfplumber_v2
+        return parse_statement_pdfplumber_v2(pdf_path, api_key=api_key, **kwargs)
     raise ValueError(f"Unknown statement_parser: {name}. Allowed: {list(PARSER_NAMES)}")
