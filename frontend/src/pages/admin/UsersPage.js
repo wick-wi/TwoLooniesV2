@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { getAdminUsers, getAdminUser, hardDeleteUser } from '../../utils/adminApi';
-import { Search, Trash2, ChevronRight, ChevronLeft, ShieldCheck, RefreshCw } from 'lucide-react';
+import { Search, ChevronRight, ChevronLeft, ShieldCheck, RefreshCw } from 'lucide-react';
 
 function UserDetailModal({ userId, token, onClose }) {
   const [data, setData] = useState(null);
