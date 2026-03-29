@@ -64,9 +64,79 @@ ENABLE_PASS3 = _env_flag_true("ENABLE_PASS3", default=True)
 
 app = FastAPI()
 
+import time as _time
+
+@app.middleware("http")
+async def _request_logger_middleware(request: Request, call_next):
+    """Log every request to api_request_log for admin analytics."""
+    start = _time.monotonic()
+    response = await call_next(request)
+    duration_ms = int((_time.monotonic() - start) * 1000)
+
+    path = request.url.path
+    # Only log /api/* paths and skip high-volume status-poll endpoints
+    if path.startswith("/api/") and "upload_statement_status" not in path:
+        try:
+            from .supabase_client import supabase as _supa  # noqa: PLC0415
+            if _supa:
+                auth_header = request.headers.get("Authorization", "")
+                uid = None
+                if auth_header.startswith("Bearer "):
+                    try:
+                        uid = _get_user_from_token(auth_header)
+                    except Exception:
+                        pass
+                import asyncio as _asyncio
+                _asyncio.create_task(
+                    _asyncio.to_thread(
+                        lambda: _supa.table("api_request_log").insert({
+                            "path": path,
+                            "method": request.method,
+                            "status_code": response.status_code,
+                            "duration_ms": duration_ms,
+                            "user_id": uid,
+                        }).execute()
+                    )
+                )
+        except Exception:
+            pass
+    return response
+
 from .upload_job_redis import job_redis_get, job_redis_setex
 
 STATEMENT_JOB_POLL_SECRET_HEADER = "X-Statement-Job-Secret"
+
+
+async def _check_upload_rate_limit(user_id: str | None) -> None:
+    """Enforce per-user upload rate limit using Redis counters.  No-op if Redis is unavailable."""
+    if not user_id:
+        return
+    try:
+        from .utils.admin_config import get_admin_config_int  # noqa: PLC0415
+        limit = get_admin_config_int("max_uploads_per_hour", default=50)
+        if limit <= 0:
+            return  # 0 = disabled
+
+        from datetime import timezone as _tz  # noqa: PLC0415
+        hour_key = datetime.now(_tz.utc).strftime("%Y%m%d%H")
+        redis_key = f"ratelimit:upload:{user_id}:{hour_key}"
+
+        # Use the same Redis abstraction as job state
+        from .upload_job_redis import job_redis_get, job_redis_setex  # noqa: PLC0415
+
+        raw = await job_redis_get(redis_key)
+        count = int(raw) if raw else 0
+        if count >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Upload rate limit reached ({limit}/hour). Please try again later.",
+            )
+        # Increment by storing count+1 with 3700s TTL (slightly over 1 hour)
+        await job_redis_setex(redis_key, 3700, str(count + 1))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug("Rate limit check skipped (Redis unavailable or error): %s", e)
 
 # Job state: Upstash REST if UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN; else REDIS_URL (e.g. local Docker).
 # The Job Management Helpers
@@ -177,6 +247,7 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                 message=f"Extracting data from {fname} ({current} of {total_files})..."
             )
 
+            _file_start_ms = int(_time.monotonic() * 1000)
             storage_path = file_item.get("storage_path")
             if supabase and storage_bucket_name and not storage_path:
                 if _try_create_storage_bucket and not _storage_bucket_created:
@@ -386,6 +457,31 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                         Path(tmp_path).unlink(missing_ok=True)
 
                 all_transactions.extend(transactions)
+                _file_duration_ms = int(_time.monotonic() * 1000) - _file_start_ms
+
+                # Telemetry: record extraction event
+                try:
+                    from .supabase_client import supabase as _supa_tel  # noqa: PLC0415
+                    if _supa_tel:
+                        _conf_scores = [
+                            t.get("confidence_score") for t in transactions
+                            if t.get("confidence_score") is not None
+                        ]
+                        _model_used = PASS2_MODEL if pass2_used or pass3_used else PASS1_MODEL
+                        _supa_tel.table("extraction_events").insert({
+                            "user_id": user_id,
+                            "job_id": job_id,
+                            "parser_name": "pdfplumber_v2" if is_csv_file else "pdfplumber",
+                            "model_name": _model_used,
+                            "pass_number": 3 if pass3_used else (2 if pass2_used else 1),
+                            "status": "success",
+                            "duration_ms": _file_duration_ms,
+                            "confidence_scores": _conf_scores if _conf_scores else None,
+                            "transaction_count": len(transactions),
+                        }).execute()
+                except Exception as _tel_err:
+                    logger.debug("Extraction telemetry insert failed: %s", _tel_err)
+
                 files_breakdown.append({
                     "filename": fname,
                     "content_sha256": file_item.get("content_sha256"),
@@ -415,6 +511,22 @@ async def process_pdf_internal(job_id: str, file_data: list, user_id: str | None
                 })
 
             except Exception as e:
+                # Telemetry: record failure
+                try:
+                    from .supabase_client import supabase as _supa_tel  # noqa: PLC0415
+                    if _supa_tel:
+                        _file_duration_ms = int(_time.monotonic() * 1000) - _file_start_ms
+                        _supa_tel.table("extraction_events").insert({
+                            "user_id": user_id,
+                            "job_id": job_id,
+                            "parser_name": "pdfplumber",
+                            "model_name": PASS1_MODEL,
+                            "status": "error",
+                            "error_message": str(e)[:500],
+                            "duration_ms": _file_duration_ms,
+                        }).execute()
+                except Exception:
+                    pass
                 raise RuntimeError(f"Failed to parse '{fname}': {e}") from e
 
         # --- Final Categorization & Wrap Up ---
@@ -465,6 +577,20 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail="At least one statement file (PDF or CSV) is required")
     if len(statements) > MAX_STATEMENTS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_STATEMENTS} statements allowed")
+
+    # Maintenance mode check (admin-configurable)
+    try:
+        from .utils.admin_config import get_admin_config_bool as _admin_bool  # noqa: PLC0415
+        if _admin_bool("maintenance_mode", default=False):
+            raise HTTPException(
+                status_code=503,
+                detail="Uploads are temporarily paused for maintenance. Please try again later.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
     if not (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         raise HTTPException(
             status_code=500,
@@ -495,6 +621,10 @@ async def upload_statement(
 
     skipped_duplicates: list[dict] = []
     user_id = _get_user_id_optional(authorization)
+
+    # Rate limiting (Redis-backed, admin-configurable threshold)
+    await _check_upload_rate_limit(user_id)
+
     if user_id and file_data:
         hashes = [f["content_sha256"] for f in file_data]
         existing = _existing_statement_hashes_for_user(user_id, hashes)
@@ -3833,6 +3963,13 @@ async def detect_internal_transfers(authorization: str = Header(None, alias="Aut
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+from .admin_routes import register_admin_routes
+register_admin_routes(app)
+
+from .chat_routes import register_chat_routes
+register_chat_routes(app)
 
 
 if __name__ == "__main__":

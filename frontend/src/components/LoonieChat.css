@@ -1,0 +1,362 @@
+/* ── Loonie floating action button ──────────────────────────────────────── */
+.loonie-fab {
+  position: fixed;
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px)); /* above bottom nav */
+  right: 1.25rem;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #f59e0b, #F9B915);
+  color: #0f0f10;
+  font-weight: 700;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(249, 185, 21, 0.4);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s;
+}
+
+.loonie-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(249, 185, 21, 0.5);
+}
+
+.loonie-fab-open {
+  padding: 0.6rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  justify-content: center;
+  background: #27272a;
+  color: #e2e8f0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.loonie-fab-open:hover {
+  background: #3f3f46;
+}
+
+.loonie-fab-label {
+  pointer-events: none;
+}
+
+/* ── Backdrop ───────────────────────────────────────────────────────────── */
+.loonie-backdrop {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  .loonie-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 48;
+  }
+}
+
+/* ── Drawer ─────────────────────────────────────────────────────────────── */
+.loonie-drawer {
+  position: fixed;
+  bottom: 0;
+  right: 1.25rem;
+  width: 380px;
+  max-width: calc(100vw - 2.5rem);
+  height: 520px;
+  max-height: calc(100vh - 120px);
+  z-index: 49;
+  display: flex;
+  flex-direction: column;
+  background: #18181b;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 48px rgba(0, 0, 0, 0.6);
+  transform: translateY(110%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.loonie-drawer-open {
+  transform: translateY(0);
+}
+
+@media (max-width: 480px) {
+  .loonie-drawer {
+    right: 0;
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    border-radius: 20px 20px 0 0;
+  }
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.loonie-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  flex-shrink: 0;
+}
+
+.loonie-header-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.loonie-header-avatar {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.loonie-header-name {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.loonie-header-sub {
+  margin: 0;
+  font-size: 0.7rem;
+  color: #71717a;
+}
+
+.loonie-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: #a1a1aa;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.loonie-close-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+}
+
+/* ── Messages list ──────────────────────────────────────────────────────── */
+.loonie-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+
+.loonie-messages::-webkit-scrollbar {
+  width: 4px;
+}
+.loonie-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+.loonie-messages::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 9999px;
+}
+
+/* ── Individual message ─────────────────────────────────────────────────── */
+.loonie-msg {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.loonie-msg-user {
+  flex-direction: row-reverse;
+}
+
+.loonie-avatar {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.loonie-bubble {
+  max-width: 80%;
+  padding: 0.6rem 0.875rem;
+  border-radius: 16px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.loonie-bubble-user {
+  background: linear-gradient(135deg, #f59e0b, #F9B915);
+  color: #0f0f10;
+  border-bottom-right-radius: 4px;
+  font-weight: 500;
+}
+
+.loonie-bubble-assistant {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: #e2e8f0;
+  border-bottom-left-radius: 4px;
+}
+
+.loonie-line {
+  margin: 0;
+}
+
+/* Markdown rendering inside assistant bubbles */
+.loonie-bubble-assistant .loonie-md-p {
+  margin: 0 0 0.5rem;
+  line-height: 1.55;
+}
+
+.loonie-bubble-assistant .loonie-md-p:last-child {
+  margin-bottom: 0;
+}
+
+.loonie-bubble-assistant .loonie-md-heading {
+  margin: 0.6rem 0 0.3rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  font-size: 0.825rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.loonie-bubble-assistant .loonie-md-ul,
+.loonie-bubble-assistant .loonie-md-ol {
+  margin: 0.25rem 0 0.5rem 1rem;
+  padding: 0;
+}
+
+.loonie-bubble-assistant .loonie-md-ul:last-child,
+.loonie-bubble-assistant .loonie-md-ol:last-child {
+  margin-bottom: 0;
+}
+
+.loonie-bubble-assistant .loonie-md-li {
+  margin-bottom: 0.2rem;
+  line-height: 1.5;
+}
+
+.loonie-bubble-assistant .loonie-md-strong {
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.loonie-bubble-assistant .loonie-md-code {
+  font-family: monospace;
+  font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
+/* ── Typing indicator ───────────────────────────────────────────────────── */
+.loonie-typing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0.75rem 1rem;
+  min-width: 56px;
+}
+
+.loonie-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #71717a;
+  animation: loonie-bounce 1.2s infinite;
+  flex-shrink: 0;
+}
+
+.loonie-dot:nth-child(2) { animation-delay: 0.2s; }
+.loonie-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes loonie-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+/* ── Input row ──────────────────────────────────────────────────────────── */
+.loonie-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  flex-shrink: 0;
+}
+
+.loonie-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-size: 0.875rem;
+  padding: 0.625rem 0.875rem;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow-y: auto;
+  transition: border-color 0.15s;
+}
+
+.loonie-input::placeholder {
+  color: #52525b;
+}
+
+.loonie-input:focus {
+  border-color: rgba(249, 185, 21, 0.4);
+}
+
+.loonie-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loonie-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #f59e0b, #F9B915);
+  color: #0f0f10;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.loonie-send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.loonie-send-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Spinner animation */
+.loonie-spin {
+  animation: loonie-spin 0.8s linear infinite;
+}
+
+@keyframes loonie-spin {
+  to { transform: rotate(360deg); }
+}

@@ -19,12 +19,20 @@ export default function ProfileMenu({ onLogout }) {
 
   const fetchDisplayName = React.useCallback(async () => {
     if (!user?.id || !supabase) return;
-    const { data } = await supabase
-      .from('profiles')
-      .select('display_name')
-      .eq('id', user.id)
-      .maybeSingle();
-    setDisplayName(data?.display_name?.trim() ?? '');
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('display_name')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (error) {
+        console.warn('Profile display name load failed:', error.message);
+        return;
+      }
+      setDisplayName(data?.display_name?.trim() ?? '');
+    } catch (e) {
+      console.warn('Profile display name load failed:', e?.message || e);
+    }
   }, [user?.id]);
 
   useEffect(() => {
